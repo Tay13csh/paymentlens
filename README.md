@@ -112,11 +112,32 @@ On wide screens, recent orders and the selected-order review appear on the left,
 
 - **Select an order:** use `View order` below the `Recent orders` table. The list shows up to 20 records sorted by local update time, including amount, currency, and payment status. Risk levels are not persisted and are not shown in the list.
 - **View results:** in `Selected order review`, enter a simulated spending baseline and click `Analyze Selected Order` to see rule metrics, What-if comparisons, and optional AI explanations. Only `COMPLETED` orders can be analyzed. Results belong to the current session and are not a saved review history. Changing the order or baseline clears the previous analysis and AI explanation.
-- **Manage payments:** `Create orders and payments` contains order creation, approval, Capture, same-attempt creation retries, and status checks for uncertain results. `Current payment order ID` identifies the payment target. Browsing another order on the left neither changes that target nor sends a request.
+- **Manage payments:** `Create orders and payments` contains order creation, approval, Capture, same-attempt creation retries, and status checks for uncertain results. `Current payment order ID` identifies the payment target. Browsing another order on the left neither changes that target nor sends a request. A currently `COMPLETED` order shows one `Payment completed` success notice. Return information is kept in collapsed `Payment details`; returning from PayPal is not proof of approval or payment completion.
 - **Access developer tools:** expand `Developer tools` in the sidebar to run the Sandbox OAuth authentication check. This section is collapsed by default.
-- **Timeline placeholder:** `Payment record and timeline (preview)` at the bottom shows the selected order's available Capture ID and local update time. Creation, approval, and payment completion times display `Not recorded`. The local update time is not a payment completion timestamp.
+- **View payment evidence:** `Payment flow evidence` below the workbench summarizes the three workflow steps and the available records for the selected order. Missing occurrence times are kept inside the collapsed `Evidence details` section rather than repeated in the main summary.
 
 The workbench uses the existing payment, database, scoring, AI, and Webhook backend logic. Other planned enhancements are not implemented in this version.
+
+## Payment flow evidence
+
+The summary shows **Order created**, **Buyer approved**, and **Payment completed** in workflow order. It is an evidence view, not a reconstruction of payment occurrence times.
+
+- **Local order record only:** a saved order ID is available. An independent order-created event has not been retained.
+- **Linked approval notification / Linked completion notification:** a corresponding notification is stored with an explicit reference to the selected order. The current order status or Capture ID alone does not produce either label.
+- **No linked record:** no attributable notification is stored for that step. This does not establish that the step never happened.
+
+Expand `Evidence details` to see the current local payment status, available Capture ID, and last local record update time. Order creation, buyer approval, and payment completion occurrence times display `Not recorded`, because provider timestamps are not persisted. An unavailable Capture ID or local timestamp is also marked explicitly. Definitions of timestamps, signature verification, and `LEGACY` records are kept in these collapsed details so the main summary stays brief.
+
+Expand `Webhook records — local storage times` for the linked notifications. Rows are ordered by **Stored at (UTC)**, the local event insertion time, not by payment occurrence time. For new deliveries, this timestamp is recorded after signature verification; it is not the exact HTTP arrival time. **Local processed at (UTC)** is when the application decided whether to update the local order. Neither timestamp replaces a provider occurrence time or the order's separate last-update timestamp.
+
+| Stored processing state | Displayed local outcome | Meaning |
+| --- | --- | --- |
+| `APPLIED` | Applied to local order | The event changed the local order state |
+| `IGNORED` | No state change | The event did not change the local state; this is not a payment failure, and the specific reason was not retained |
+| `PENDING` | Waiting for local processing | The saved event has not completed local processing |
+| `LEGACY` | LEGACY — insufficient historical context | The old record lacks sufficient historical context; it is not used as independent step evidence |
+
+Unlinked `LEGACY` records cannot be assigned to an order and are excluded from that order's event table. New deliveries are verified by the receiver before storage, but the database does not retain a separate verification-response audit. The evidence query uses a read-only SQLite connection and does not create or migrate missing or older databases. No database fields or payment writes were added for this view.
 
 ## Manual walkthrough
 
@@ -137,7 +158,7 @@ After installing dependencies, run this from the project root. Real credentials,
 python -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 32 test methods: 26 existing regression tests and 6 workbench page tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, and preserving rule results during What-if changes or AI failures. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
+Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 44 test methods: 26 original regression tests, 10 workbench page tests, and 8 payment-evidence tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, preserving rule results during What-if changes or AI failures, English interface text, and accurate payment-completion notices. Evidence tests cover read-only queries, missing or older databases, separate time meanings, duplicate and out-of-order notifications, unlinked legacy records, and the distinction between current state and independent event evidence. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
 
 ## Current limitations
 

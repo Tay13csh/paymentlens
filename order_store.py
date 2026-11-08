@@ -292,6 +292,32 @@ def get_orders(limit: int = 20) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def get_order_events(order_id: str) -> List[Dict[str, Any]]:
+    """Read linked event evidence without creating, migrating, or updating a database."""
+    if not DATABASE_PATH.is_file():
+        return []
+    connection = sqlite3.connect(DATABASE_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA query_only = ON")
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(webhook_events)")}
+        required = {"event_id", "event_type", "order_id", "capture_id", "processing_state", "received_at", "processed_at"}
+        if not required.issubset(columns):
+            # Old records without order references cannot be safely attributed.
+            return []
+        rows = connection.execute(
+            """
+            SELECT event_id, event_type, capture_id, processing_state, received_at, processed_at
+            FROM webhook_events WHERE order_id = ?
+            ORDER BY received_at, rowid
+            """,
+            (order_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
 def _process_webhook_event(connection: sqlite3.Connection, event_id: str) -> bool:
     """Apply saved, verified fields only; caller owns the write transaction."""
     event = connection.execute(

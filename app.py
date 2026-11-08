@@ -18,6 +18,7 @@ from order_store import (
     begin_order_creation,
     complete_order_creation,
     get_order,
+    get_order_events,
     get_order_creation_attempt,
     get_orders,
     mark_capture_ready,
@@ -30,7 +31,7 @@ st.set_page_config(page_title="PayGuard AI | Order workbench", layout="wide")
 st.markdown(
     """
     <style>
-    .st-key-workbench table {
+    .st-key-workbench table, .st-key-payment_evidence table {
         display: block;
         max-width: 100%;
         overflow-x: auto;
@@ -51,7 +52,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("PayGuard AI")
-st.write("Post-payment review assistant | 付款后复核助手")
+st.write("Post-payment review assistant")
 st.caption("Sandbox test environment. Rules-based scores are not fraud probabilities or PayPal risk decisions.")
 
 returned_order_id = st.query_params.get("token")
@@ -261,7 +262,6 @@ def render_payment():
             if not returned_order_id:
                 st.session_state["paypal_order_id"] = creation_attempt["order_id"]
                 st.session_state["paypal_approval_url"] = creation_attempt["approval_url"]
-            st.success("Sandbox order created. Approve it with a Sandbox buyer account.")
         else:
             st.warning(
                 f"Creation is unconfirmed for {creation_attempt['amount']} CAD. "
@@ -314,16 +314,24 @@ def render_payment():
         paypal_order_id = st.session_state["paypal_order_id"]
         saved_capture_order = get_order(paypal_order_id)
         st.write(f"Current payment order ID: {paypal_order_id}")
-        if "paypal_approval_url" in st.session_state:
+        payment_completed = saved_capture_order and saved_capture_order["status"] == "COMPLETED"
+        if payment_completed:
+            st.success("Payment completed")
+        elif saved_capture_order:
+            st.caption(f"Current payment status: {saved_capture_order['status']}")
+            if creation_attempt and creation_attempt["order_id"] == paypal_order_id:
+                st.caption("Sandbox order created. Approve it with a Sandbox buyer account.")
+        if "paypal_approval_url" in st.session_state and not payment_completed:
             st.link_button("Approve Order in PayPal", st.session_state["paypal_approval_url"])
-        elif returned_order_id:
-            st.success("PayPal returned to this app with an approved order.")
+        if returned_order_id == paypal_order_id:
+            with st.expander("Payment details", expanded=False):
+                st.write("PayPal returned to this app with this order reference.")
+                st.caption("Returning from PayPal is not proof of buyer approval or completed payment.")
 
         if not saved_capture_order:
             st.error("This order is not present in the local order database, so Capture is unavailable.")
         elif saved_capture_order["status"] == "COMPLETED" or saved_capture_order["capture_state"] == "COMPLETED":
             st.button("Capture Approved Order", disabled=True, help="This order has already been captured.")
-            st.success("Capture is already completed.")
             if saved_capture_order["capture_id"]:
                 st.write(f"Capture ID: {saved_capture_order['capture_id']}")
         elif saved_capture_order["capture_state"] in {"UNKNOWN", "IN_PROGRESS"}:
@@ -396,14 +404,79 @@ with st.container(key="workbench"):
     with payment_column:
         render_payment()
 
-with st.expander("Payment record and timeline (preview)", expanded=False):
+with st.container(key="payment_evidence"):
+    st.subheader("Payment flow evidence")
     if selected_order:
-        st.write(f"Review order ID: {selected_order['order_id']}")
-        st.write(f"Capture ID: {selected_order.get('capture_id') or 'Not recorded'}")
-        st.write(f"Local record updated (UTC): {selected_order.get('updated_at') or 'Not recorded'}")
-        st.write("Order created at: Not recorded")
-        st.write("Buyer approved at: Not recorded")
-        st.write("Payment completed at: Not recorded")
-        st.caption("Timeline placeholder. Local record update time is not the payment completion time.")
+        st.caption(f"Evidence for review order: {selected_order['order_id']}")
+        events = get_order_events(selected_order["order_id"])
+        linked_types = {
+            event["event_type"] for event in events
+            if event["processing_state"] != "LEGACY"
+        }
+        approval_evidence = "Linked approval notification" if "CHECKOUT.ORDER.APPROVED" in linked_types else "No linked record"
+        completion_evidence = "Linked completion notification" if "PAYMENT.CAPTURE.COMPLETED" in linked_types else "No linked record"
+        st.markdown(
+            "| Step | Evidence status |\n"
+            "| --- | --- |\n"
+            "| Order created | Local order record only |\n"
+            f"| Buyer approved | {approval_evidence} |\n"
+            f"| Payment completed | {completion_evidence} |"
+        )
+        st.caption(
+            "Evidence comes from saved records. A missing record does not mean a step was skipped."
+        )
+
+        with st.expander("Evidence details", expanded=False):
+            st.write(f"Current local payment status: {selected_order['status']}")
+            st.write(f"Capture ID: {selected_order.get('capture_id') or 'Not recorded'}")
+            st.write(f"Local record updated (UTC): {selected_order.get('updated_at') or 'Not recorded'}")
+            st.write("Order created at: Not recorded")
+            st.write("Buyer approved at: Not recorded")
+            st.write("Payment completed at: Not recorded")
+            st.markdown("**How to read these records**")
+            st.caption(
+                "A current order status or Capture ID is not independent event evidence. "
+                "No linked record means no attributable notification is stored, not that the step did not happen."
+            )
+            st.caption(
+                "Provider occurrence times are not stored. Local record update time is not the payment completion time. "
+                "Steps are shown in workflow order, not a reconstructed chronology."
+            )
+            st.caption(
+                "Ordered by local storage time (UTC), not payment occurrence time. "
+                "For new deliveries, Stored at is recorded after signature verification, not at the exact HTTP arrival time. "
+                "Local processing time is when the application decided whether to update the order."
+            )
+            st.caption(
+                "No state change is not a payment failure; the specific reason was not saved. "
+                "Unlinked LEGACY events cannot be assigned to an order and are excluded. "
+                "The receiver verifies new deliveries before storage, but no separate verification-response audit is retained."
+            )
+
+        with st.expander("Webhook records — local storage times", expanded=False):
+            st.caption("Local record times (UTC), not the order in which payments happened.")
+            outcomes = {
+                "APPLIED": "Applied to local order",
+                "IGNORED": "No state change",
+                "PENDING": "Waiting for local processing",
+                "LEGACY": "LEGACY — insufficient historical context",
+            }
+            if events:
+                rows = [
+                    "| Event ID | Event | Stored at (UTC) | Local processed at (UTC) | Local outcome |",
+                    "| --- | --- | --- | --- | --- |",
+                ]
+                for event in events:
+                    cells = (
+                        event["event_id"], event["event_type"], event.get("received_at") or "Not recorded",
+                        event.get("processed_at") or "Not recorded",
+                        outcomes.get(event["processing_state"], "Unknown local outcome"),
+                    )
+                    rows.append("| " + " | ".join(
+                        str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ") for value in cells
+                    ) + " |")
+                st.markdown("\n".join(rows))
+            else:
+                st.info("No linked record for this order.")
     else:
-        st.info("Select a saved order to view available record details. Payment event times are not recorded.")
+        st.info("Select a saved order to view payment flow evidence.")

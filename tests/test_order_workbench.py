@@ -1,6 +1,7 @@
 """Offline page tests for browsing, review isolation, and payment targeting."""
 
 import tempfile
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -153,6 +154,57 @@ class OrderWorkbenchTests(unittest.TestCase):
         self.assertEqual(dict(app.session_state["risk_analysis"]), original)
         self.assertTrue(any("Synthetic AI failure" in item.value for item in app.error))
         self.requests.assert_not_called()
+
+    def test_project_interface_uses_english_subtitle_and_text(self):
+        self.save("REVIEW")
+        app = self.app()
+        self.assertTrue(any(item.value == "Post-payment review assistant" for item in app.markdown))
+        text = "\n".join(
+            item.value for kind in ("title", "subheader", "markdown", "caption", "info", "warning", "error", "success")
+            for item in getattr(app, kind)
+        )
+        self.assertIsNone(re.search(r"[\u3400-\u9fff]", text))
+        self.assert_no_requests()
+
+    def test_completed_return_has_one_success_notice_and_folded_return_details(self):
+        attempt = order_store.begin_order_creation("10.00")
+        order_store.complete_order_creation(attempt, "PAID", "https://example.invalid/approve")
+        order_store.update_order_status("PAID", "COMPLETED", "SYNTHETIC-CAPTURE")
+        app = AppTest.from_file(str(APP_PATH))
+        app.query_params["create_attempt"] = attempt
+        app.query_params["token"] = "PAID"
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertEqual([item.value for item in app.success], ["Payment completed"])
+        details = next(item for item in app.expander if item.label == "Payment details")
+        self.assertFalse(details.proto.expanded)
+        self.assertTrue(any("order reference" in item.value for item in details.markdown))
+        self.assertTrue(any("not proof" in item.value for item in details.caption))
+        self.assertTrue(next(button for button in app.button if button.label == "Capture Approved Order").disabled)
+        self.assert_no_requests()
+
+    def test_approval_return_alone_is_not_presented_as_payment_completed(self):
+        self.save("APPROVED", status="APPROVED")
+        app = AppTest.from_file(str(APP_PATH))
+        app.query_params["token"] = "APPROVED"
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.success)
+        self.assertTrue(any(item.label == "Payment details" for item in app.expander))
+        self.assertEqual(order_store.get_order("APPROVED")["status"], "APPROVED")
+        self.assert_no_requests()
+
+    def test_refunded_capture_is_not_presented_as_current_payment_completed(self):
+        self.save("REFUND", status="COMPLETED")
+        order_store.update_order_status("REFUND", "REFUNDED")
+        app = self.app()
+        app.session_state["paypal_order_id"] = "REFUND"
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertFalse(any(item.value == "Payment completed" for item in app.success))
+        self.assertTrue(any("Current payment status: REFUNDED" in item.value for item in app.caption))
+        self.assertTrue(next(button for button in app.button if button.label == "Capture Approved Order").disabled)
+        self.assert_no_requests()
 
 
 if __name__ == "__main__":
