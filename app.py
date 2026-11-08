@@ -26,9 +26,33 @@ from order_store import (
     update_order_status,
 )
 
+st.set_page_config(page_title="PayGuard AI | Order workbench", layout="wide")
+st.markdown(
+    """
+    <style>
+    .st-key-workbench table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+    @media (max-width: 900px) {
+        .st-key-workbench [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+        }
+        .st-key-workbench [data-testid="stColumn"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 0 !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("PayGuard AI")
-st.write("An AI-powered payment risk analysis assistant.")
-st.write("Analyze completed payments against a user-provided simulated spending baseline.")
+st.write("Post-payment review assistant | 付款后复核助手")
+st.caption("Sandbox test environment. Rules-based scores are not fraud probabilities or PayPal risk decisions.")
 
 returned_order_id = st.query_params.get("token")
 if returned_order_id and returned_order_id != st.session_state.get("paypal_order_id"):
@@ -37,41 +61,73 @@ if returned_order_id and returned_order_id != st.session_state.get("paypal_order
     st.session_state.pop("paypal_capture_status", None)
     st.session_state.pop("paypal_capture_id", None)
 
-st.subheader("PayPal Sandbox Authentication")
-if st.button("Get Sandbox Access Token"):
-    try:
-        paypal_config = st.secrets["paypal"]
-        client_id = paypal_config["client_id"]
-        client_secret = paypal_config["client_secret"]
+with st.sidebar.expander("Developer tools", expanded=False):
+    st.subheader("PayPal Sandbox Authentication")
+    if st.button("Get Sandbox Access Token"):
+        try:
+            paypal_config = st.secrets["paypal"]
+            client_id = paypal_config["client_id"]
+            client_secret = paypal_config["client_secret"]
 
-        if not client_id or not client_secret:
-            st.error("Enter your Sandbox Client ID and Secret in .streamlit/secrets.toml.")
-        elif client_id == "YOUR_SANDBOX_CLIENT_ID" or client_secret == "YOUR_SANDBOX_SECRET":
-            st.error("Replace the placeholders in .streamlit/secrets.toml with your Sandbox credentials.")
-        else:
-            get_access_token(client_id, client_secret)
-            st.success("PayPal Sandbox OAuth authentication succeeded. An access token was received.")
-    except PayPalAuthError as error:
-        st.error(str(error))
-    except Exception:
-        st.error("Could not read the local PayPal configuration. Check the format and fields in .streamlit/secrets.toml.")
+            if not client_id or not client_secret:
+                st.error("Enter your Sandbox Client ID and Secret in .streamlit/secrets.toml.")
+            elif client_id == "YOUR_SANDBOX_CLIENT_ID" or client_secret == "YOUR_SANDBOX_SECRET":
+                st.error("Replace the placeholders in .streamlit/secrets.toml with your Sandbox credentials.")
+            else:
+                get_access_token(client_id, client_secret)
+                st.success("PayPal Sandbox OAuth authentication succeeded. An access token was received.")
+        except PayPalAuthError as error:
+            st.error(str(error))
+        except Exception:
+            st.error("Could not read the local PayPal configuration. Check the format and fields in .streamlit/secrets.toml.")
 
-st.subheader("Completed Order Risk Analysis")
-completed_orders = [order for order in get_orders() if order["status"] == "COMPLETED"]
 
-if not completed_orders:
-    st.info("No completed orders are available for analysis yet. Complete a Sandbox payment first.")
-else:
-    orders_by_id = {order["order_id"]: order for order in completed_orders}
+def clear_review():
+    for key in ("risk_analysis", "risk_analysis_signature", "ai_explanation"):
+        st.session_state.pop(key, None)
+
+
+def render_review():
+    st.subheader("Recent orders")
+    st.caption("Up to 20 orders, sorted by local record update time. Review results are not stored.")
+    orders = get_orders()
+    if not orders:
+        clear_review()
+        st.info("No saved orders yet. Create a Sandbox order in Create orders and payments.")
+        return None
+
+    # A small read-only table avoids a data-grid dependency on the browsing path.
+    def table_cell(value):
+        return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ")
+
+    rows = ["| Order ID | Amount | Currency | Payment status |", "| --- | --- | --- | --- |"]
+    for order in orders:
+        cells = (order["order_id"], f"{float(order['amount']):.2f}", order["currency"], order["status"])
+        rows.append("| " + " | ".join(table_cell(value) for value in cells) + " |")
+    st.markdown("\n".join(rows))
+    orders_by_id = {order["order_id"]: order for order in orders}
     selected_order_id = st.selectbox(
-        "Select a completed order",
+        "View order",
         options=list(orders_by_id),
         format_func=lambda order_id: (
             f"{order_id} | {float(orders_by_id[order_id]['amount']):.2f} "
             f"{orders_by_id[order_id]['currency']} | {orders_by_id[order_id]['status']}"
         ),
+        key="review_order_id",
     )
     selected_order = orders_by_id[selected_order_id]
+    st.subheader("Selected order review")
+    st.write(f"Review order ID: {selected_order_id}")
+    st.write(
+        f"{float(selected_order['amount']):.2f} {selected_order['currency']} "
+        f"| Payment status: {selected_order['status']}"
+    )
+    st.caption("No saved review history. Any result shown below belongs to this session only.")
+    if selected_order["status"] != "COMPLETED":
+        clear_review()
+        st.info("Review is available only for completed payments. No risk level is inferred for this order.")
+        return selected_order
+
     order_amount = float(selected_order["amount"])
     currency = selected_order["currency"]
     average_amount = st.number_input(
@@ -108,6 +164,7 @@ else:
     analysis = st.session_state.get("risk_analysis")
     if analysis and st.session_state.get("risk_analysis_signature") == analysis_signature:
         st.subheader("Order Risk Analysis Result")
+        st.caption("Current session review. This result is not saved.")
         st.write(f"Order ID: {analysis['order_id']}")
         col1, col2, col3 = st.columns(3)
         col1.metric("Order Amount", f"{analysis['order_amount']:.2f} {analysis['currency']}")
@@ -187,148 +244,166 @@ else:
 
         if "ai_explanation" in st.session_state:
             st.markdown(st.session_state["ai_explanation"])
+    return selected_order
 
-st.subheader("PayPal Sandbox Orders")
-order_amount = st.number_input("Sandbox Order Amount (CAD)", min_value=0.01, value=10.00, step=1.00)
 
-creation_attempt_id = st.query_params.get("create_attempt")
-creation_attempt = get_order_creation_attempt(creation_attempt_id) if creation_attempt_id else None
-if creation_attempt_id and not creation_attempt:
-    st.warning("The saved creation attempt is unavailable. Restore the original database to retry it safely.")
-elif creation_attempt:
-    if creation_attempt["order_id"]:
-        if not returned_order_id:
-            st.session_state["paypal_order_id"] = creation_attempt["order_id"]
-            st.session_state["paypal_approval_url"] = creation_attempt["approval_url"]
-        st.success("Sandbox order created. Approve it with a Sandbox buyer account.")
-    else:
-        st.warning(
-            f"Creation is unconfirmed for {creation_attempt['amount']} CAD. "
-            "Retry the same creation to recover its result. Creating a new order may create an additional order."
-        )
+def render_payment():
+    st.subheader("Create orders and payments")
+    st.caption("Sandbox test payments. Browsing orders does not change the current payment target.")
+    order_amount = st.number_input("Sandbox Order Amount (CAD)", min_value=0.01, value=10.00, step=1.00)
 
-creation_error = st.session_state.pop("paypal_creation_error", None)
-if creation_error:
-    st.error(creation_error)
-
-new_creation = st.button("Create New Sandbox Order" if creation_attempt_id else "Create Sandbox Order")
-retry_creation = False
-if creation_attempt and not creation_attempt["order_id"]:
-    retry_creation = st.button("Retry Same Order Creation")
-    st.caption("Retry uses the saved amount, even if the amount input above has changed.")
-
-if new_creation or retry_creation:
-    try:
-        paypal_config = st.secrets["paypal"]
-        client_id = paypal_config["client_id"]
-        client_secret = paypal_config["client_secret"]
-
-        if not client_id or not client_secret:
-            st.session_state["paypal_creation_error"] = "Enter your Sandbox Client ID and Secret in .streamlit/secrets.toml."
-        elif client_id == "YOUR_SANDBOX_CLIENT_ID" or client_secret == "YOUR_SANDBOX_SECRET":
-            st.session_state["paypal_creation_error"] = "Replace the placeholders in .streamlit/secrets.toml with your Sandbox credentials."
+    creation_attempt_id = st.query_params.get("create_attempt")
+    creation_attempt = get_order_creation_attempt(creation_attempt_id) if creation_attempt_id else None
+    if creation_attempt_id and not creation_attempt:
+        st.warning("The saved creation attempt is unavailable. Restore the original database to retry it safely.")
+    elif creation_attempt:
+        if creation_attempt["order_id"]:
+            if not returned_order_id:
+                st.session_state["paypal_order_id"] = creation_attempt["order_id"]
+                st.session_state["paypal_approval_url"] = creation_attempt["approval_url"]
+            st.success("Sandbox order created. Approve it with a Sandbox buyer account.")
         else:
-            if new_creation:
-                creation_attempt_id = begin_order_creation(f"{order_amount:.2f}")
-                st.query_params["create_attempt"] = creation_attempt_id
-                st.query_params.pop("token", None)
-                creation_attempt = get_order_creation_attempt(creation_attempt_id)
-            order_id, approval_url = create_order(
-                client_id, client_secret, creation_attempt["amount"], request_id=creation_attempt_id
+            st.warning(
+                f"Creation is unconfirmed for {creation_attempt['amount']} CAD. "
+                "Retry the same creation to recover its result. Creating a new order may create an additional order."
             )
-            complete_order_creation(creation_attempt_id, order_id, approval_url)
-            st.session_state["paypal_order_id"] = order_id
-            st.session_state["paypal_approval_url"] = approval_url
-            st.session_state.pop("paypal_capture_status", None)
-            st.session_state.pop("paypal_capture_id", None)
-    except PayPalAuthError as error:
-        st.session_state["paypal_creation_error"] = str(error)
-    except PayPalOrderError as error:
-        st.session_state["paypal_creation_error"] = str(error)
-    except Exception:
-        st.session_state["paypal_creation_error"] = "Could not finish order creation. Any saved attempt is retained for retry."
-    st.rerun()
 
-if "paypal_order_id" in st.session_state:
-    paypal_order_id = st.session_state["paypal_order_id"]
-    saved_capture_order = get_order(paypal_order_id)
-    st.write(f"Order ID: {paypal_order_id}")
-    if "paypal_approval_url" in st.session_state:
-        st.link_button("Approve Order in PayPal", st.session_state["paypal_approval_url"])
-    elif returned_order_id:
-        st.success("PayPal returned to this app with an approved order.")
+    creation_error = st.session_state.pop("paypal_creation_error", None)
+    if creation_error:
+        st.error(creation_error)
 
-    if not saved_capture_order:
-        st.error("This order is not present in the local order database, so Capture is unavailable.")
-    elif saved_capture_order["status"] == "COMPLETED" or saved_capture_order["capture_state"] == "COMPLETED":
-        st.button("Capture Approved Order", disabled=True, help="This order has already been captured.")
-        st.success("Capture is already completed.")
-        if saved_capture_order["capture_id"]:
-            st.write(f"Capture ID: {saved_capture_order['capture_id']}")
-    elif saved_capture_order["capture_state"] in {"UNKNOWN", "IN_PROGRESS"}:
-        st.warning("Capture result is unconfirmed. Check PayPal order status before trying again.")
-        if st.button("Check PayPal Order Status", key="check_paypal_order_status"):
-            try:
-                paypal_config = st.secrets["paypal"]
-                remote_status, capture_id = get_order_status(
-                    paypal_config["client_id"],
-                    paypal_config["client_secret"],
-                    paypal_order_id,
+    new_creation = st.button("Create New Sandbox Order" if creation_attempt_id else "Create Sandbox Order")
+    retry_creation = False
+    if creation_attempt and not creation_attempt["order_id"]:
+        retry_creation = st.button("Retry Same Order Creation")
+        st.caption("Retry uses the saved amount, even if the amount input above has changed.")
+
+    if new_creation or retry_creation:
+        try:
+            paypal_config = st.secrets["paypal"]
+            client_id = paypal_config["client_id"]
+            client_secret = paypal_config["client_secret"]
+
+            if not client_id or not client_secret:
+                st.session_state["paypal_creation_error"] = "Enter your Sandbox Client ID and Secret in .streamlit/secrets.toml."
+            elif client_id == "YOUR_SANDBOX_CLIENT_ID" or client_secret == "YOUR_SANDBOX_SECRET":
+                st.session_state["paypal_creation_error"] = "Replace the placeholders in .streamlit/secrets.toml with your Sandbox credentials."
+            else:
+                if new_creation:
+                    creation_attempt_id = begin_order_creation(f"{order_amount:.2f}")
+                    st.query_params["create_attempt"] = creation_attempt_id
+                    st.query_params.pop("token", None)
+                    creation_attempt = get_order_creation_attempt(creation_attempt_id)
+                order_id, approval_url = create_order(
+                    client_id, client_secret, creation_attempt["amount"], request_id=creation_attempt_id
                 )
-            except Exception:
-                st.error("Could not confirm the PayPal order status. The Capture result remains unconfirmed.")
-            else:
-                if remote_status == "COMPLETED":
-                    update_order_status(paypal_order_id, remote_status, capture_id)
-                    st.rerun()
-                elif remote_status == "APPROVED":
-                    mark_capture_ready(paypal_order_id)
-                    st.rerun()
-                else:
-                    st.warning(
-                        f"PayPal reports {remote_status}. The Capture result remains unconfirmed; "
-                        "no new Capture request was sent."
-                    )
-    else:
-        if st.button("Capture Approved Order"):
-            if not begin_capture(paypal_order_id):
-                st.warning("The order state changed. Refresh the page and check the saved order status.")
-            else:
+                complete_order_creation(creation_attempt_id, order_id, approval_url)
+                st.session_state["paypal_order_id"] = order_id
+                st.session_state["paypal_approval_url"] = approval_url
+                st.session_state.pop("paypal_capture_status", None)
+                st.session_state.pop("paypal_capture_id", None)
+        except PayPalAuthError as error:
+            st.session_state["paypal_creation_error"] = str(error)
+        except PayPalOrderError as error:
+            st.session_state["paypal_creation_error"] = str(error)
+        except Exception:
+            st.session_state["paypal_creation_error"] = "Could not finish order creation. Any saved attempt is retained for retry."
+        st.rerun()
+
+    if "paypal_order_id" in st.session_state:
+        paypal_order_id = st.session_state["paypal_order_id"]
+        saved_capture_order = get_order(paypal_order_id)
+        st.write(f"Current payment order ID: {paypal_order_id}")
+        if "paypal_approval_url" in st.session_state:
+            st.link_button("Approve Order in PayPal", st.session_state["paypal_approval_url"])
+        elif returned_order_id:
+            st.success("PayPal returned to this app with an approved order.")
+
+        if not saved_capture_order:
+            st.error("This order is not present in the local order database, so Capture is unavailable.")
+        elif saved_capture_order["status"] == "COMPLETED" or saved_capture_order["capture_state"] == "COMPLETED":
+            st.button("Capture Approved Order", disabled=True, help="This order has already been captured.")
+            st.success("Capture is already completed.")
+            if saved_capture_order["capture_id"]:
+                st.write(f"Capture ID: {saved_capture_order['capture_id']}")
+        elif saved_capture_order["capture_state"] in {"UNKNOWN", "IN_PROGRESS"}:
+            st.warning("Capture result is unconfirmed. Check PayPal order status before trying again.")
+            if st.button("Check PayPal Order Status", key="check_paypal_order_status"):
                 try:
                     paypal_config = st.secrets["paypal"]
-                    client_id = paypal_config["client_id"]
-                    client_secret = paypal_config["client_secret"]
+                    remote_status, capture_id = get_order_status(
+                        paypal_config["client_id"],
+                        paypal_config["client_secret"],
+                        paypal_order_id,
+                    )
                 except Exception:
-                    release_capture(paypal_order_id)
-                    st.error("Could not read the local PayPal configuration. Check .streamlit/secrets.toml.")
+                    st.error("Could not confirm the PayPal order status. The Capture result remains unconfirmed.")
                 else:
-                    try:
-                        capture_status, capture_id = capture_order(
-                            client_id,
-                            client_secret,
-                            paypal_order_id,
-                        )
-                    except PayPalCaptureUnknownError:
-                        mark_capture_unknown(paypal_order_id)
+                    if remote_status == "COMPLETED":
+                        update_order_status(paypal_order_id, remote_status, capture_id)
                         st.rerun()
-                    except (PayPalAuthError, PayPalOrderError) as error:
-                        release_capture(paypal_order_id)
-                        st.error(str(error))
-                    except Exception:
-                        mark_capture_unknown(paypal_order_id)
+                    elif remote_status == "APPROVED":
+                        mark_capture_ready(paypal_order_id)
                         st.rerun()
                     else:
-                        if capture_status == "COMPLETED":
-                            update_order_status(paypal_order_id, capture_status, capture_id)
-                            st.rerun()
-                        else:
+                        st.warning(
+                            f"PayPal reports {remote_status}. The Capture result remains unconfirmed; "
+                            "no new Capture request was sent."
+                        )
+        else:
+            if st.button("Capture Approved Order"):
+                if not begin_capture(paypal_order_id):
+                    st.warning("The order state changed. Refresh the page and check the saved order status.")
+                else:
+                    try:
+                        paypal_config = st.secrets["paypal"]
+                        client_id = paypal_config["client_id"]
+                        client_secret = paypal_config["client_secret"]
+                    except Exception:
+                        release_capture(paypal_order_id)
+                        st.error("Could not read the local PayPal configuration. Check .streamlit/secrets.toml.")
+                    else:
+                        try:
+                            capture_status, capture_id = capture_order(
+                                client_id,
+                                client_secret,
+                                paypal_order_id,
+                            )
+                        except PayPalCaptureUnknownError:
                             mark_capture_unknown(paypal_order_id)
                             st.rerun()
+                        except (PayPalAuthError, PayPalOrderError) as error:
+                            release_capture(paypal_order_id)
+                            st.error(str(error))
+                        except Exception:
+                            mark_capture_unknown(paypal_order_id)
+                            st.rerun()
+                        else:
+                            if capture_status == "COMPLETED":
+                                update_order_status(paypal_order_id, capture_status, capture_id)
+                                st.rerun()
+                            else:
+                                mark_capture_unknown(paypal_order_id)
+                                st.rerun()
 
-st.subheader("Recent Sandbox Orders")
-for saved_order in get_orders():
-    capture_label = f" | Capture ID: {saved_order['capture_id']}" if saved_order["capture_id"] else ""
-    st.write(
-        f"{saved_order['order_id']} | {saved_order['amount']} {saved_order['currency']} "
-        f"| {saved_order['status']}{capture_label}"
-    )
+    else:
+        st.info("No active payment order. Create a Sandbox order here to begin.")
+
+with st.container(key="workbench"):
+    review_column, payment_column = st.columns([2, 1], gap="large")
+    with review_column:
+        selected_order = render_review()
+    with payment_column:
+        render_payment()
+
+with st.expander("Payment record and timeline (preview)", expanded=False):
+    if selected_order:
+        st.write(f"Review order ID: {selected_order['order_id']}")
+        st.write(f"Capture ID: {selected_order.get('capture_id') or 'Not recorded'}")
+        st.write(f"Local record updated (UTC): {selected_order.get('updated_at') or 'Not recorded'}")
+        st.write("Order created at: Not recorded")
+        st.write("Buyer approved at: Not recorded")
+        st.write("Payment completed at: Not recorded")
+        st.caption("Timeline placeholder. Local record update time is not the payment completion time.")
+    else:
+        st.info("Select a saved order to view available record details. Payment event times are not recorded.")

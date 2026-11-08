@@ -1,34 +1,34 @@
 # PayGuard AI
 
-一个用于学习 PayPal Sandbox 集成的 Streamlit 项目：完成测试付款后，使用规则分析订单金额相对于**用户输入的模拟消费基准**的比例，并可通过 AI 生成简短解释。
+A local prototype of a post-payment review assistant for small merchants, built with Streamlit and PayPal Sandbox. After a test payment is completed, the app compares the order amount with a **user-provided simulated spending baseline** and optionally generates an AI explanation of the rule results.
 
-**规则评分不是欺诈概率，也不是 PayPal 的风控结论。** 本项目不读取真实历史消费来计算基准，不训练欺诈检测模型，不在付款前拦截交易。AI 只解释已有规则结果，不参与打分或支付决策。
+**The rule score is not a fraud probability or PayPal's risk assessment.** The app does not calculate a baseline from real spending history, train a fraud detection model, or block payments before checkout. AI explains existing rule results; it does not calculate scores or make payment decisions.
 
-## 功能与评分
+## Features and scoring
 
-- Sandbox OAuth、创建订单、买家批准、Capture，以及 SQLite 持久化。
-- 创建超时后复用已保存的请求键和金额；Capture 防重复，结果不确定时先查询状态。
-- Webhook 验签、事件去重、未匹配事件暂存及订单入库后的自动补处理。
-- 对已完成订单进行规则评分；What-if 只模拟金额变化，不修改订单或发起付款。
-- 可选的 AI 英文解释；发送金额、币种、模拟基准和规则指标，不发送订单 ID、邮箱或 PayPal 密钥。
+- Sandbox OAuth, order creation, buyer approval, Capture, and SQLite persistence.
+- A saved request key and amount for order-creation retries; duplicate-Capture protection and status checks when a Capture result is uncertain.
+- Webhook signature verification, event deduplication, pending storage for unmatched events, and automatic processing when the corresponding order is saved.
+- Rules-based review of completed orders. What-if simulations change neither saved orders nor payments.
+- Optional AI explanations in English. The request includes the amount, currency, simulated baseline, and rule metrics, without order IDs, email addresses, or PayPal credentials.
 
-比例 = 订单金额 ÷ 模拟消费基准：
+Amount ratio = order amount / simulated spending baseline:
 
-| 比例 | 规则分数 | 显示等级 |
+| Amount ratio | Rule score | Displayed level |
 | --- | --- | --- |
-| 小于 2 | 10/100 | Low Risk |
-| 大于等于 2、小于 5 | 50/100 | Medium Risk |
-| 大于等于 5 | 80/100 | High Risk |
+| Below 2 | 10/100 | Low Risk |
+| At least 2 and below 5 | 50/100 | Medium Risk |
+| At least 5 | 80/100 | High Risk |
 
-## 验证状态
+## Validation status
 
-- **正常 Sandbox 流程已人工验证**：本地创建订单、买家批准、Capture、订单记录及真实 Webhook 接收；包括订单已完成时收到通知并返回 `processed: false` 的情况。这是维护者的手工验证，不是每次运行的自动端到端验证。
-- **异常场景主要由离线测试覆盖**：超时重试、重复事件、事件早于订单、事务回滚、容量限制、旧库迁移，以及退款／撤销状态保护。
-- **Webhook Simulator 投递尚未确认**。离线模拟事件不等于 Simulator 投递，也不等于真实签名验证。不要为了测试关闭验签。
+- **The normal Sandbox flow has been manually verified**: local order creation, buyer approval, Capture, saved order records, and receipt of a real Webhook. This includes a notification returning `processed: false` when the order was already completed. These are the maintainer's manual checks, not an automated end-to-end check performed on every run.
+- **Failure and edge cases are primarily covered by offline tests**: timeout retries, duplicate events, events arriving before orders, transaction rollback, capacity limits, legacy database migration, and protection of refunded or reversed states.
+- **Webhook Simulator delivery has not yet been confirmed.** Offline mock events do not establish Simulator delivery or real signature verification. Do not disable signature verification for testing.
 
-## 环境与安装
+## Requirements and installation
 
-以下命令适用于 macOS／Linux，从项目根目录执行。需要 Python 3.9+ 和 pip；现有本地测试环境使用 Python 3.9。依赖未完整锁定版本，新环境仍需运行测试确认兼容性。
+The following commands target macOS or Linux and should be run from the project root. Python 3.9+ and pip are required; the existing local test environment uses Python 3.9. Dependencies are not fully version-locked, so run the tests to check compatibility in a new environment.
 
 ```sh
 python3 -m venv .venv
@@ -36,67 +36,67 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-依赖包括 Streamlit、requests、FastAPI、Uvicorn、toml 和 OpenAI Python SDK。即使不使用 AI，也需要安装 SDK，因为应用启动时会导入该模块。ngrok 是独立工具，不包含在 Python 依赖中。
+Dependencies include Streamlit, requests, FastAPI, Uvicorn, toml, and the OpenAI Python SDK. The SDK must be installed even when AI explanations are not used, because it is imported at application startup. ngrok is a separate tool and is not included in the Python dependencies.
 
-## 本地配置
+## Local configuration
 
 ```sh
 mkdir -p .streamlit
 cp -n .streamlit/secrets.toml.example .streamlit/secrets.toml
 ```
 
-`cp -n` 不覆盖已有配置。只在自己的电脑上编辑 `.streamlit/secrets.toml`，不要提交或粘贴真实密钥。
+`cp -n` leaves an existing configuration file untouched. Edit `.streamlit/secrets.toml` only on your own machine. Never commit or share real credentials.
 
-| 字段 | 用途 |
+| Field | Purpose |
 | --- | --- |
-| `paypal.client_id` | Sandbox 商家应用的 Client ID |
-| `paypal.client_secret` | 同一 Sandbox 应用的 Secret |
-| `paypal.webhook_id` | 为该应用注册接收地址后获得的 Webhook ID；不是事件 ID 或订单 ID |
-| `openai.api_key` | 可选，仅生成 AI 解释时需要 |
-| `openai.model` | 替换为账户可用且兼容当前调用的模型 ID |
+| `paypal.client_id` | Client ID of the Sandbox merchant application |
+| `paypal.client_secret` | Secret of the same Sandbox application |
+| `paypal.webhook_id` | Webhook ID issued after registering the receiver URL for that application; not an event ID or order ID |
+| `openai.api_key` | Optional; required only to generate AI explanations |
+| `openai.model` | Replace with a model ID available to your account and compatible with the current API call |
 
-PayPal 配置来自 Sandbox 商家应用；批准订单时使用单独的 Sandbox 买家账户，不使用真实买家账号。Webhook ID 可在完成下方接收地址注册后填入。
+Use credentials from a Sandbox merchant application and a separate Sandbox buyer account to approve orders. Do not use a real buyer account. Fill in the Webhook ID after registering the receiver URL as described below.
 
-AI 使用 Responses API，代码包含 `reasoning={"effort": "none"}`；不是所有模型都兼容该参数。示例中的模型名是占位符，必须替换；不使用 AI 时可省略整个 `[openai]` 配置。应用不会自动读取 `.env`。
+AI explanations use the Responses API with `reasoning={"effort": "none"}`; not every model supports this parameter. The model name in the example is a placeholder and must be replaced. If AI explanations are not needed, the entire `[openai]` section can be omitted. The app does not automatically load `.env` files.
 
-真实配置被 `.gitignore` 排除，`secrets.toml.example` 可以纳入 Git。数据库、数据库附属文件、日志和虚拟环境也被排除。
+The real configuration is excluded by `.gitignore`, while `secrets.toml.example` can be tracked in Git. Databases, database sidecar files, logs, and virtual environments are also excluded.
 
-## 启动服务
+## Start the services
 
-在三个终端中运行，前两个终端均进入同一项目目录并执行 `source .venv/bin/activate`，以共用项目旁的 `payguard.db`。
+Use three terminals. In the first two, open the same project directory and run `source .venv/bin/activate`. Both services use `payguard.db` beside the project source files.
 
-### 1. Streamlit 网页
+### 1. Streamlit app
 
 ```sh
 python -m streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
-打开 http://localhost:8501 。现有 PayPal 返回／取消地址固定为这个地址，因此本说明面向同一台电脑上的本地操作。
+Open http://localhost:8501 . The PayPal return and cancel URLs are currently fixed to this address, so these instructions assume local use on the same computer.
 
-### 2. Webhook 接收服务
+### 2. Webhook receiver
 
 ```sh
 python -m uvicorn webhook_server:app --host 127.0.0.1 --port 8000
 ```
 
-健康检查：
+Health checks:
 
 ```sh
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8501/_stcore/health
 ```
 
-分别应返回 `{"status":"ok"}` 和 `ok`。`/health` 正常只说明服务可响应，不证明密钥、PayPal 连接或验签已成功。
+The expected responses are `{"status":"ok"}` and `ok`, respectively. A healthy endpoint confirms that the service can respond; it does not verify credentials, PayPal connectivity, or signature verification.
 
-### 3. ngrok HTTPS 隧道
+### 3. ngrok HTTPS tunnel
 
-如果已经有指向本机 8000 端口的隧道，复用现有隧道，不更改其配置。否则，安装并按 ngrok 自身要求完成本机认证后运行：
+If a tunnel already forwards to local port 8000, reuse it without changing its configuration. Otherwise, install ngrok, complete its local authentication setup, and run:
 
 ```sh
 ngrok http 8000
 ```
 
-将显示的 HTTPS 域名加上 `/webhooks/paypal`，例如 `https://YOUR_NGROK_DOMAIN/webhooks/paypal`。在 PayPal Sandbox 商家应用中注册这个完整接收地址，订阅：
+Append `/webhooks/paypal` to the displayed HTTPS domain, for example `https://YOUR_NGROK_DOMAIN/webhooks/paypal`. Register that full receiver URL in the PayPal Sandbox merchant application and subscribe to:
 
 - `CHECKOUT.ORDER.APPROVED`
 - `PAYMENT.CAPTURE.COMPLETED`
@@ -104,47 +104,59 @@ ngrok http 8000
 - `PAYMENT.CAPTURE.REFUNDED`
 - `PAYMENT.CAPTURE.REVERSED`
 
-把注册得到的 Webhook ID 填入本地配置。若隧道域名改变，也要更新注册的接收地址。ngrok 在此暴露的是 Webhook 服务，不是 Streamlit 网页。
+Save the resulting Webhook ID in the local configuration. If the tunnel domain changes, update the registered receiver URL as well. This tunnel exposes the Webhook receiver, not the Streamlit app.
 
-## 手工操作顺序
+## Order workbench
 
-1. 完成配置并启动服务。可用 `Get Sandbox Access Token` 检查 Sandbox 认证。
-2. 输入 CAD 金额，点击 `Create Sandbox Order`，通过批准链接使用 Sandbox 买家账户批准，再点击 `Capture Approved Order`。
-3. 等待本地订单显示 `COMPLETED` 和 Capture ID。选择已完成订单，输入模拟消费基准，再点击 `Analyze Selected Order`。
-4. 用 What-if 比较假设金额；配置好 OpenAI 后可点击 `Generate AI Explanation`。生成 AI 解释会调用外部 API，可能产生费用。
+On wide screens, recent orders and the selected-order review appear on the left, with order creation and payment controls on the right. At window widths of 900px or less, the sections stack vertically: browsing and review first, payment controls below. The order table can scroll horizontally instead of squeezing both columns together.
 
-创建结果不确定时，使用 `Retry Same Order Creation`，它复用原键和原金额；只有明确需要另一订单时才点击 `Create New Sandbox Order`。刷新后保留 URL 的 `create_attempt` 参数和本地数据库，才能恢复该创建尝试。Capture 不确定时使用 `Check PayPal Order Status`，不要把超时当成付款失败。
+- **Select an order:** use `View order` below the `Recent orders` table. The list shows up to 20 records sorted by local update time, including amount, currency, and payment status. Risk levels are not persisted and are not shown in the list.
+- **View results:** in `Selected order review`, enter a simulated spending baseline and click `Analyze Selected Order` to see rule metrics, What-if comparisons, and optional AI explanations. Only `COMPLETED` orders can be analyzed. Results belong to the current session and are not a saved review history. Changing the order or baseline clears the previous analysis and AI explanation.
+- **Manage payments:** `Create orders and payments` contains order creation, approval, Capture, same-attempt creation retries, and status checks for uncertain results. `Current payment order ID` identifies the payment target. Browsing another order on the left neither changes that target nor sends a request.
+- **Access developer tools:** expand `Developer tools` in the sidebar to run the Sandbox OAuth authentication check. This section is collapsed by default.
+- **Timeline placeholder:** `Payment record and timeline (preview)` at the bottom shows the selected order's available Capture ID and local update time. Creation, approval, and payment completion times display `Not recorded`. The local update time is not a payment completion timestamp.
 
-Webhook 返回 `received: true` 表示验签后已接受该事件；`processed: true` 表示这次改变了订单状态。`processed: false` 可能是等待订单匹配、重复投递、同状态无需更新或状态转换被拒绝，不等于验签失败。
+The workbench uses the existing payment, database, scoring, AI, and Webhook backend logic. Other planned enhancements are not implemented in this version.
 
-## 离线测试
+## Manual walkthrough
 
-安装依赖后，在项目根目录运行；不需要真实配置、运行中的服务或 PayPal 连接：
+1. Complete the configuration and start the services. Use `Get Sandbox Access Token` to check Sandbox authentication if needed.
+2. Enter an amount in CAD, click `Create Sandbox Order`, follow the approval link using the Sandbox buyer account, and click `Capture Approved Order`.
+3. Wait for the local order to show `COMPLETED` and a Capture ID. Select the completed order, enter a simulated spending baseline, and click `Analyze Selected Order`.
+4. Use What-if to compare hypothetical amounts. With OpenAI configured, click `Generate AI Explanation` for an explanation. This calls an external API and may incur charges.
+
+If an order-creation result is uncertain, use `Retry Same Order Creation` to reuse the original key and amount. Click `Create New Sandbox Order` only when another order is explicitly intended. To recover an attempt after refreshing, retain the URL's `create_attempt` parameter and the local database. If Capture is uncertain, use `Check PayPal Order Status`; a timeout does not establish that payment failed.
+
+For Webhook responses, `received: true` means the event was accepted after signature verification; `processed: true` means this request changed the order's state. `processed: false` can mean that the event is waiting for an order, is a duplicate, needs no same-state update, or was rejected by the state-transition rules. It does not mean signature verification failed.
+
+## Offline tests
+
+After installing dependencies, run this from the project root. Real credentials, running services, and a PayPal connection are not required:
 
 ```sh
 python -B -m unittest discover -s tests -v
 ```
 
-测试使用临时 SQLite 数据库、模拟凭据与模拟响应，不操作项目的真实数据库。当前包含 26 个测试方法；测试数目不等于真实 Sandbox 验证次数。终端可能打印 `risk.py` 的学习示例及环境警告，以 unittest 的最终 `OK`／`FAILED` 为结果。
+Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 32 test methods: 26 existing regression tests and 6 workbench page tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, and preserving rule results during What-if changes or AI failures. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
 
-## 当前限制
+## Current limitations
 
-- 这是本地学习原型，缺少多用户隔离和生产部署方案；只配置了 Sandbox、CAD 和本机返回地址。
-- 分数是人为设定的规则，模拟消费基准不代表真实历史；AI 文本也不构成欺诈判断。
-- Webhook 仅持久化事件 ID、类型、订单／Capture 关联、处理状态和时间，不保存完整请求、付款人资料或签名头，因此没有完整的验签审计快照。
-- 待处理事件上限为 1,000 条，总事件上限为 100,000 条，保存的字符串字段最多 255 字符。容量不足时返回 503，不静默删除待处理事件；目前没有自动清理或告警。
-- 旧事件迁移为 `LEGACY` 并保留去重身份；缺失的关联信息不能凭空恢复。现有事件关联和状态模型不覆盖所有支付／退款情形。
-- 本地创建记录不能保证超出 PayPal 幂等键保留期限后的重试仍能去重；丢失数据库或尝试 URL 也会影响恢复。
-- 依赖版本未完全锁定；本地 Git 备份不包含密钥或运行数据，也不能代替磁盘备份。
+- This is a local learning prototype without multi-user isolation or a production deployment setup. Payment creation is configured only for Sandbox, CAD, and local return URLs.
+- Scores use manually defined rules, the simulated baseline is not real spending history, and AI text is not a fraud assessment.
+- Webhook storage retains event IDs, event types, order/Capture references, processing states, and timestamps. It does not retain full requests, payer details, or signature headers, so it is not a complete signature-verification audit snapshot.
+- Pending events are capped at 1,000, total events at 100,000, and stored string fields at 255 characters. Capacity failures return 503 rather than silently deleting pending events. Automatic cleanup and alerting are not implemented.
+- Legacy events retain their deduplication identities and are marked `LEGACY`; missing references cannot be reconstructed from those records. The event-matching and state models do not cover every payment or refund scenario.
+- Saved creation attempts cannot guarantee deduplication for retries beyond PayPal's idempotency-key retention period. Losing the database or attempt URL also affects recovery.
+- Dependencies are not fully version-locked. Local Git backups exclude credentials and runtime data and do not replace a disk backup.
 
-## 主要文件
+## Main files
 
-| 文件 | 职责 |
+| File | Responsibility |
 | --- | --- |
-| `app.py` | Streamlit 界面与操作流程 |
-| `paypal_auth.py` | Sandbox OAuth、Orders、Capture、订单查询与远程验签 |
-| `order_store.py` | SQLite、创建尝试、状态转换与待处理事件补处理 |
-| `webhook_server.py` | FastAPI 健康检查及 Webhook 接收 |
-| `risk.py` | 规则评分及早期学习示例 |
-| `ai_explanation.py` | 可选 AI 解释 |
-| `tests/` | 离线回归测试 |
+| `app.py` | Streamlit interface and user flows |
+| `paypal_auth.py` | Sandbox OAuth, Orders, Capture, order queries, and remote signature verification |
+| `order_store.py` | SQLite, creation attempts, state transitions, and pending-event processing |
+| `webhook_server.py` | FastAPI health check and Webhook receiver |
+| `risk.py` | Rule scoring and early learning examples |
+| `ai_explanation.py` | Optional AI explanations |
+| `tests/` | Offline regression tests |
