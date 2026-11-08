@@ -1,0 +1,6 @@
+streamlit
+requests
+fastapi
+uvicorn
+toml
+openai>=1.68.2,<2
