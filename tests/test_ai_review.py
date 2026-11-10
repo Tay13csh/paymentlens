@@ -134,6 +134,7 @@ class AIReviewPageTests(unittest.TestCase):
     def analyzed_app(self):
         app = AppTest.from_file(str(APP_PATH)).run()
         app.selectbox(key="review_order_id").select("PRIVATE-ORDER-A").run()
+        app.button(key="open_payment_review").click().run()
         app.button(key="analyze_saved_order").click().run()
         self.assertFalse(app.exception)
         return app
@@ -189,6 +190,7 @@ class AIReviewPageTests(unittest.TestCase):
         self.assertNotIn("ai_explanation", app.session_state)
         app.button(key="generate_ai_explanation").click().run()
         app.selectbox(key="review_order_id").select("PRIVATE-ORDER-B").run()
+        app.button(key="open_payment_review").click().run()
         self.assertNotIn("risk_analysis", app.session_state)
         self.assertNotIn("ai_explanation", app.session_state)
         app.button(key="analyze_saved_order").click().run()

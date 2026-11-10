@@ -49,6 +49,8 @@ class OrderSummaryTests(unittest.TestCase):
 
     def app(self):
         app = AppTest.from_file(str(APP_PATH)).run()
+        if app.selectbox:
+            app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         return app
 
@@ -88,6 +90,7 @@ class OrderSummaryTests(unittest.TestCase):
         self.save("B", "600.00", "USD")
         app = self.app()
         app.selectbox(key="review_order_id").select("A").run()
+        app.button(key="open_payment_review").click().run()
         app.button(key="analyze_saved_order").click().run()
         self.assertIn("10/100", self.summary(app))
         app.number_input(key="simulated_average_CAD").set_value(50.0).run()
@@ -98,6 +101,7 @@ class OrderSummaryTests(unittest.TestCase):
         self.assertIn("700.00", self.summary(app))
         self.assertIn("Not analyzed", self.summary(app))
         app.selectbox(key="review_order_id").select("B").run()
+        app.button(key="open_payment_review").click().run()
         self.assertIn("USD", self.summary(app))
         self.assertIn("Not analyzed", self.summary(app))
         self.assert_no_requests()
@@ -118,10 +122,11 @@ class OrderSummaryTests(unittest.TestCase):
                 self.save(status, status=status)
                 app = self.app()
                 app.selectbox(key="review_order_id").select(status).run()
-                summary = self.summary(app)
+                app.button(key="open_payment_review").click().run()
+                summary = next(item.value for item in app.markdown if item.value.startswith('<section class="pg-payment-overview'))
                 self.assertIn(f'">{status}</span>', summary)
-                self.assertIn("Not analyzed", summary)
-                self.assertNotIn("Risk</p>", summary)
+                self.assertNotIn("Rule review", summary)
+                self.assertNotIn("Not analyzed", summary)
                 self.assertFalse(any(button.key == "analyze_saved_order" for button in app.button))
         self.assert_no_requests()
 
@@ -132,6 +137,7 @@ class OrderSummaryTests(unittest.TestCase):
         app = self.app()
         app.session_state["paypal_order_id"] = "PAYMENT"
         app.selectbox(key="review_order_id").select(unusual).run()
+        app.button(key="open_payment_review").click().run()
         summary = self.summary(app)
         self.assertNotIn("<script>", summary)
         self.assertIn("&lt;script&gt;", summary)

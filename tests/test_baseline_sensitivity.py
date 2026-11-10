@@ -42,11 +42,12 @@ class BaselineSensitivityTests(unittest.TestCase):
     def app(self):
         app = AppTest.from_file(str(APP_PATH)).run()
         app.selectbox(key="review_order_id").select("A").run()
+        app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         return app
 
     def custom(self, app):
-        return next(field for field in app.text_input if field.label.startswith("Custom simulated baseline"))
+        return next(field for field in app.text_input if field.label.startswith("Custom simulated comparison baseline"))
 
     def section(self, app, title):
         return next(
@@ -57,11 +58,11 @@ class BaselineSensitivityTests(unittest.TestCase):
         )
 
     def scores(self, app):
-        if not any(item.value == "**Selected scenario**" for item in app.markdown):
+        if not any(item.value == "**Your comparison result**" for item in app.markdown):
             return []
         # Logical scenario assertions should not depend on the visual section order.
         examples = self.section(app, "Compare example assumptions")
-        selected = self.section(app, "Selected scenario")
+        selected = self.section(app, "Your comparison result")
         return [metric.value for section in (examples, selected) for metric in section.metric if metric.label == "Rule score"]
 
     def assert_no_requests(self):
@@ -89,7 +90,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         self.custom(app).set_value("4").run()
         self.assertFalse(app.exception)
         self.assertEqual(self.scores(app), ["10/100", "50/100", "80/100", "50/100"])
-        ratios = [metric.value for metric in self.section(app, "Selected scenario").metric if metric.label == "Amount ratio"]
+        ratios = [metric.value for metric in self.section(app, "Your comparison result").metric if metric.label == "Amount ratio"]
         self.assertEqual(ratios[-1], "2.5×")
         self.assertEqual(order_store.get_order("A")["amount"], "10.00")
         self.assert_no_requests()
@@ -149,7 +150,7 @@ class BaselineSensitivityTests(unittest.TestCase):
                 self.custom(app).set_value(baseline).run()
                 self.assertFalse(app.exception)
                 self.assertEqual(self.scores(app)[-1], score)
-                ratios = [metric.value for metric in self.section(app, "Selected scenario").metric if metric.label == "Amount ratio"]
+                ratios = [metric.value for metric in self.section(app, "Your comparison result").metric if metric.label == "Amount ratio"]
                 self.assertTrue(ratios[-1].startswith(ratio_prefix), ratios[-1])
         self.custom(app).set_value("0.00000001").run()
         self.assertFalse(app.exception)
@@ -163,6 +164,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         key_a = self.custom(app).key
         self.custom(app).set_value("4").run()
         app.selectbox(key="review_order_id").select("B").run()
+        app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         key_b = self.custom(app).key
         self.assertNotEqual(key_a, key_b)
@@ -179,7 +181,8 @@ class BaselineSensitivityTests(unittest.TestCase):
         app = self.app()
         self.assertFalse(any(item.label == "Advanced: hypothetical order amount" for item in app.expander))
         app.button(key="analyze_saved_order").click().run()
-        advanced = next(item for item in app.expander if item.label == "Advanced: hypothetical order amount")
+        self.assertTrue(any(item.label == "Hypothetical amount" for item in app.tabs))
+        advanced = next(item for item in app.expander if item.label == "Explore assumptions")
         self.assertFalse(advanced.proto.expanded)
         original = dict(app.session_state["risk_analysis"])
         next(field for field in app.number_input if field.label.startswith("Hypothetical Order Amount")).set_value(1000.0).run()
@@ -192,19 +195,20 @@ class BaselineSensitivityTests(unittest.TestCase):
         self.save("PENDING", "10.00", "CAD", "APPROVED")
         app = self.app()
         app.selectbox(key="review_order_id").select("PENDING").run()
+        app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
-        self.assertFalse(app.text_input)
+        self.assertFalse(any(field.label.startswith("Custom simulated comparison") for field in app.text_input))
         self.assertFalse(self.scores(app))
         self.assertNotIn("risk_analysis", app.session_state)
         self.assert_no_requests()
 
     def test_collapsed_panel_keeps_hint_and_open_closed_rendering_preserves_state(self):
-        title = "Baseline sensitivity — compare assumptions"
+        title = "Explore assumptions"
         app = self.app()
         panel = next(item for item in app.expander if item.label == title)
         self.assertFalse(panel.proto.expanded)
         self.assertTrue(any(item.value == "Same payment, different simulated baselines." for item in app.caption))
-        self.assertTrue(any(field.label.startswith("Custom simulated baseline") for field in panel.text_input))
+        self.assertTrue(any(field.label.startswith("Custom simulated comparison baseline") for field in panel.text_input))
         self.custom(app).set_value("4").run()
         app.button(key="analyze_saved_order").click().run()
         app.session_state["ai_explanation"] = "Existing observation."
@@ -252,7 +256,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         self.assert_no_requests()
 
     def test_preset_clicks_preserve_review_ai_payment_database_and_folded_content(self):
-        title = "Baseline sensitivity — compare assumptions"
+        title = "Explore assumptions"
         app = self.app()
         app.button(key="analyze_saved_order").click().run()
         app.session_state["ai_explanation"] = "Existing observation."
@@ -293,6 +297,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         next(button for button in app.button if button.label == "Use baseline 2 CAD").click().run()
         key_a = self.custom(app).key
         app.selectbox(key="review_order_id").select("B").run()
+        app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         self.assertNotEqual(self.custom(app).key, key_a)
         self.assertEqual(self.custom(app).value, "10")
@@ -302,6 +307,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         self.assertEqual(self.custom(app).value, "5")
         self.assertEqual(self.scores(app)[-1], "50/100")
         app.selectbox(key="review_order_id").select("A").run()
+        app.button(key="open_payment_review").click().run()
         self.assertNotEqual(self.custom(app).value, "5")
         self.assertIn("CAD", self.custom(app).label)
         self.assert_no_requests()
@@ -309,13 +315,13 @@ class BaselineSensitivityTests(unittest.TestCase):
     def test_selected_scenario_is_first_and_invalid_input_clears_only_its_result(self):
         app = self.app()
         headings = [item.value for item in app.markdown]
-        self.assertLess(headings.index("**Selected scenario**"), headings.index("**Compare example assumptions**"))
+        self.assertLess(headings.index("**Your comparison result**"), headings.index("**Compare example assumptions**"))
         next(button for button in app.button if button.label == "Use baseline 5 CAD").click().run()
-        selected = self.section(app, "Selected scenario")
+        selected = self.section(app, "Your comparison result")
         self.assertEqual([item.value for item in selected.metric if item.label == "Rule score"], ["50/100"])
         self.custom(app).set_value("invalid").run()
         self.assertFalse(app.exception)
-        selected = self.section(app, "Selected scenario")
+        selected = self.section(app, "Your comparison result")
         self.assertFalse(selected.metric)
         self.assertTrue(selected.warning)
         self.assertFalse(any("Selected baseline:" in item.value for item in selected.markdown))

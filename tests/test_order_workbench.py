@@ -48,11 +48,14 @@ class OrderWorkbenchTests(unittest.TestCase):
 
     def app(self):
         app = AppTest.from_file(str(APP_PATH)).run()
+        if app.selectbox:
+            app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         return app
 
     def select(self, app, order_id):
         app.selectbox(key="review_order_id").select(order_id).run()
+        app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
 
     def assert_no_requests(self):
@@ -65,10 +68,11 @@ class OrderWorkbenchTests(unittest.TestCase):
         app = self.app()
         self.assertFalse(app.selectbox)
         self.assertTrue(any(button.label == "Create Sandbox Order" for button in app.button))
-        tools = next(expander for expander in app.sidebar.expander if expander.label == "Developer tools")
+        self.assertTrue(any(tab.label == "Sandbox tools" for tab in app.tabs))
+        tools = next(expander for expander in app.expander if expander.label == "Authentication")
         self.assertFalse(tools.proto.expanded)
-        self.assertTrue(any(button.label == "Get Sandbox Access Token" for button in app.sidebar.button))
-        self.assertTrue(any("No saved orders" in item.value for item in app.info))
+        self.assertTrue(any(button.label == "Get Sandbox Access Token" for button in app.button))
+        self.assertTrue(any("No saved payments" in item.value for item in app.info))
         self.assert_no_requests()
 
     def test_list_displays_saved_payment_fields_without_invented_risk_or_payment_time(self):
@@ -76,10 +80,10 @@ class OrderWorkbenchTests(unittest.TestCase):
         self.save("PENDING", status="APPROVED")
         self.save("REFUND", status="REFUNDED")
         app = self.app()
-        table = next(item.value for item in app.markdown if item.value.startswith("| Order ID |"))
-        self.assertIn("| COMPLETE | 12.34 | USD | COMPLETED |", table)
-        self.assertIn("| PENDING | 10.00 | CAD | APPROVED |", table)
-        self.assertIn("| REFUND | 10.00 | CAD | REFUNDED |", table)
+        table = next(item.value for item in app.markdown if item.value.startswith("| Payment |"))
+        self.assertIn("| …MPLETE | 12.34 | USD | COMPLETED |", table)
+        self.assertIn("| …ENDING | 10.00 | CAD | APPROVED |", table)
+        self.assertIn("| …REFUND | 10.00 | CAD | REFUNDED |", table)
         self.assertNotIn("Risk Level", table)
         self.select(app, "COMPLETE")
         text = "\n".join(item.value for item in app.markdown)
@@ -158,7 +162,7 @@ class OrderWorkbenchTests(unittest.TestCase):
     def test_project_interface_uses_english_subtitle_and_text(self):
         self.save("REVIEW")
         app = self.app()
-        self.assertTrue(any(item.value == "Review payment facts. Compare simulated assumptions." for item in app.markdown))
+        self.assertTrue(any(item.value == "Review a payment and its supporting records." for item in app.markdown))
         text = "\n".join(
             item.value for kind in ("title", "subheader", "markdown", "caption", "info", "warning", "error", "success")
             for item in getattr(app, kind)

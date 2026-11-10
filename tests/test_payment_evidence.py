@@ -47,6 +47,8 @@ class PaymentEvidenceTests(unittest.TestCase):
 
     def app(self):
         app = AppTest.from_file(str(APP_PATH)).run()
+        if app.selectbox:
+            app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
         return app
 
@@ -99,7 +101,7 @@ class PaymentEvidenceTests(unittest.TestCase):
         self.assertIn("<h3>Payment completed</h3>", steps)
         self.assertEqual(steps.count("No linked record"), 2)
         self.assertNotIn("Not recorded", steps)
-        details = next(item for item in app.expander if item.label == "Evidence details")
+        details = next(item for item in app.expander if item.label == "Record details")
         self.assertFalse(details.proto.expanded)
         text = "\n".join(item.value for item in details.markdown)
         self.assertIn("Current local payment status: COMPLETED", text)
@@ -123,7 +125,7 @@ class PaymentEvidenceTests(unittest.TestCase):
         self.assertIn("2026-01-01 03:00:00", table)
         self.assertIn("No state change", table)
         self.assertNotIn("2040-01-01", table)
-        details = next(item for item in app.expander if item.label == "Evidence details")
+        details = next(item for item in app.expander if item.label == "Record details")
         self.assertIn("Local record updated (UTC): 2026-01-01 01:00:00", "\n".join(item.value for item in details.markdown))
         self.assertTrue(any("not payment occurrence time" in item.value for item in app.caption))
         self.assertTrue(any("No state change is not a payment failure" in item.value for item in app.caption))
@@ -162,6 +164,7 @@ class PaymentEvidenceTests(unittest.TestCase):
             original = order_store.get_order(order_id)
             app = self.app()
             app.selectbox(key="review_order_id").select(order_id).run()
+            app.button(key="open_payment_review").click().run()
             self.assertFalse(app.exception)
             self.assertIn("Linked completion notification", self.steps(app))
             self.assertEqual(order_store.get_order(order_id), original)
@@ -174,8 +177,10 @@ class PaymentEvidenceTests(unittest.TestCase):
         app = self.app()
         app.session_state["paypal_order_id"] = "WITH-EVIDENCE"
         app.selectbox(key="review_order_id").select("WITH-EVIDENCE").run()
+        app.button(key="open_payment_review").click().run()
         self.assertIn("Linked approval notification", self.steps(app))
         app.selectbox(key="review_order_id").select("NO-EVIDENCE").run()
+        app.button(key="open_payment_review").click().run()
         self.assertIn("<h3>Buyer approved</h3>", self.steps(app))
         self.assertEqual(self.steps(app).count("No linked record"), 2)
         self.assertFalse(any(item.value.startswith("| Event ID |") for item in app.markdown))
@@ -185,7 +190,7 @@ class PaymentEvidenceTests(unittest.TestCase):
     def test_empty_workbench_explains_how_to_view_evidence(self):
         app = self.app()
         self.assertFalse(any(item.value.startswith('<div class="pg-evidence-grid"') for item in app.markdown))
-        self.assertTrue(any("Select a saved order to view payment flow evidence" in item.value for item in app.info))
+        self.assertTrue(any("No saved payments yet" in item.value for item in app.info))
         self.assert_no_requests()
 
     def test_three_step_cards_use_neutral_missing_evidence_not_failure(self):

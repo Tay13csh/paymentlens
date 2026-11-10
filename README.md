@@ -1,6 +1,6 @@
 # PayGuard AI
 
-A local prototype of a post-payment review assistant for small merchants, built with Streamlit and PayPal Sandbox. The interface introduces its purpose as: `Review payment facts. Compare simulated assumptions.` After a test payment is completed, the app compares the order amount with a **user-provided simulated spending baseline** and optionally generates an AI explanation of the rule results.
+A local prototype of a post-payment review assistant for small merchants, built with Streamlit and PayPal Sandbox. Select a saved payment to review its locally recorded status, linked notifications, and information that has not been recorded. Optional tools compare simulated assumptions using the existing rules. The interface introduces its purpose as: `Review a payment and its supporting records.`
 
 **The rule score is not a fraud probability or PayPal's risk assessment.** The app does not calculate a baseline from real spending history, train a fraud detection model, or block payments before checkout. AI explains existing rule results; it does not calculate scores or make payment decisions.
 
@@ -106,29 +106,57 @@ Append `/webhooks/paypal` to the displayed HTTPS domain, for example `https://YO
 
 Save the resulting Webhook ID in the local configuration. If the tunnel domain changes, update the registered receiver URL as well. This tunnel exposes the Webhook receiver, not the Streamlit app.
 
-## Order workbench
+## First-use workflow
 
-On wide screens, recent orders and the selected-order review appear on the left, with order creation and payment controls on the right. At window widths of 900px or less, the sections stack vertically: browsing and review first, payment controls below. The order table can scroll horizontally instead of squeezing both columns together.
+The default `Review payments` tab focuses on saved payments and supporting records. `Sandbox tools` is a separate tab for test-payment operations and authentication. No simulated spending baseline is required to view a payment.
 
-The interface uses navy text, teal actions, light backgrounds, rounded cards, and consistent spacing. The selected-order summary highlights the amount and currency, the saved payment status in a compact badge, and a separately labeled **Rule review** result. It shows `Not analyzed` until a matching analysis exists in the current session. Results are labeled `Current session only · Not saved`; they do not represent saved review history. Changing the selected order, amount, currency, or simulated baseline invalidates the previous displayed review, and a new session starts without an analysis. Summary fields stack vertically on narrow screens, and long order references wrap rather than being clipped.
+1. Use `Select a payment` below the recent-payments list, then click **Review payment**.
+2. Read **Payment overview** for the amount, currency, and payment status from the saved local record. This is not a live PayPal query. The overview does not show a rule score or require analysis.
+   Use **Check payment against your expectation** below it: enter the expected amount and currency, then click **Check payment**. No rule analysis or AI call is needed.
+3. The default-visible **AI rule explanation** entry after the overview explains simulated rules only, not payment verification. Without a valid rule result, **Open rule analysis** opens the optional analysis area without calculating or requesting AI. Read **Payment records** for the linked evidence, and the short notice explaining which occurrence times are not recorded. General manual-check suggestions are explicitly labeled as suggestions, not findings about the payment.
+4. Expand **Record details** for full identifiers and timestamp definitions, or **Notification records** for the event table and local processing outcomes.
+5. Optionally expand **Explore assumptions** to compare simulated baselines or run the existing rules. These tools are not required for record viewing.
 
-- **Select an order:** use `View order` below the `Recent orders` table. The list shows up to 20 records sorted by local update time, including amount, currency, and payment status. Risk levels are not persisted and are not shown in the list.
-- **View results:** in `Selected order review`, enter a simulated spending baseline and click `Analyze Selected Order` to see rule metrics, What-if comparisons, and optional AI explanations. Only `COMPLETED` orders can be analyzed. Results belong to the current session and are not a saved review history. Changing the order or baseline clears the previous analysis and AI explanation.
-- **Manage payments:** `Create orders and payments` contains order creation, approval, Capture, same-attempt creation retries, and status checks for uncertain results. `Current payment order ID` identifies the payment target. Browsing another order on the left neither changes that target nor sends a request. A currently `COMPLETED` order shows one `Payment completed` success notice. Return information is kept in collapsed `Payment details`; returning from PayPal is not proof of approval or payment completion.
-- **Access developer tools:** expand `Developer tools` in the sidebar to run the Sandbox OAuth authentication check. This section is collapsed by default.
-- **View payment evidence:** `Payment flow evidence` below the workbench summarizes the three workflow steps and the available records for the selected order. Missing occurrence times are kept inside the collapsed `Evidence details` section rather than repeated in the main summary.
+If no payment records exist, the page explicitly directs you to `Sandbox tools`: enter a test amount, click `Create Sandbox Order`, approve it using a Sandbox buyer account, and Capture it there. Return to `Review payments` to open the saved record.
 
-The workbench uses the existing payment, database, scoring, AI, and Webhook backend logic. Other planned enhancements are not implemented in this version.
+Changing the selector does not automatically open another payment. Until **Review payment** is clicked, a message names the pending selection and explicitly states that the overview still shows the previously opened payment. Its records, simulation inputs, rule results, and AI observation remain attached to that opened payment. A successful review click changes only the viewing target, never the current test-payment target, and does not mark a payment as reviewed or approved in the database.
+
+The recent list shows up to 20 payments sorted by local update time, with amounts, currencies, saved statuses, and shortened references. Selector positions distinguish entries even when shortened references match. Full IDs remain available in collapsed details. Navy text, teal actions, rounded cards, and responsive layouts are retained; card groups stack at window widths of 900px or less.
+
+Inside **Explore assumptions**, three tabs keep optional tools separate without nested disclosure panels:
+
+- **Compare baselines:** the independent simulation controls and `Your comparison result` appear before the fixed example assumptions.
+- **Rule review:** enter a **Simulated comparison baseline**, click **Calculate rule result**, and optionally request an AI explanation of those six rule inputs. This result is session-only, not a saved review history. The old summary's `Not analyzed` indicator stays inside these optional tools rather than the payment overview.
+- **Hypothetical amount:** the original amount simulation, available after calculating a rule result, retains its original baseline and state keys.
+
+The outer panel is collapsed by default. Its contents and tab contents are still rendered, so closing it or changing tabs does not erase inputs, rule results, or AI observations. Assumption tools remain limited to `COMPLETED` payments; records for every payment status can still be viewed.
+
+In **Sandbox tools**, the existing `Create orders and payments` area retains creation, approval, Capture, same-attempt creation retries, and uncertain-result status checks. `Current payment order ID` identifies this separate action target. Authentication is inside a default-collapsed **Authentication** panel. Viewing records does not trigger these operations. A saved `COMPLETED` order shows `Payment completed`; returning from PayPal is not proof of approval or completed payment.
+
+The proposed scoring-formula change is not implemented; the existing demo rules remain unchanged.
+
+## Check a payment against your expectation
+
+Open a payment, enter your expected amount and currency, and click **Check payment**. Expected values are user-provided and have not been externally verified. The compact result shows **Expected payment**, **Recorded order amount**, the same-currency difference, and a summary. Differences are described as a recorded amount below or above expectation, rather than proof of underpayment or overpayment.
+
+The recorded amount and currency come from the locally saved order-creation details. They are **not an independently verified Capture amount**, net receipt, or bank settlement. The status is also a saved local value, not a fresh PayPal query. The check does not verify receipt of funds or change a payment.
+
+- Supported currencies are CAD, USD and EUR, using exact decimal arithmetic with two-decimal precision. Positive, finite inputs with up to 26 integer digits are supported; extra nonzero decimal places are rejected rather than rounded. Trailing zeroes are accepted. Unsupported or invalid recorded amounts are not silently converted.
+- With different currencies, the check reports the mismatch without subtracting amounts or performing currency conversion.
+- Amount differences, currency mismatches, refunded/reversed states, and unconfirmed completion remain visible in the summary. An amount match with `APPROVED` is not proof of completed payment. `REFUNDED` and `REVERSED` take precedence over an older completed Capture record. `UNKNOWN` or `IN_PROGRESS` Capture states explicitly leave completion unconfirmed.
+- Collapsed **Details** contains separate amount, currency and status checks, full identifiers, and the data-source limitations. A matching result only describes the saved order details and local status.
+- Editing either expected input, opening another payment, changing the pending selection, or changing the underlying saved record clears the previous result. Click **Check payment** again to generate a result. While a changed selection awaits **Review payment**, checking is disabled. Each payment uses separate expected-input keys; results do not transfer to another payment.
+- This tool is isolated from simulated baselines, rule results, AI observations and the Sandbox payment target. It writes no database records and makes no external requests.
 
 ## Baseline sensitivity comparison
 
-Select a completed order to use `Baseline sensitivity — compare assumptions` below its summary, even before running the current-session review. The panel is collapsed by default, with the hint `Same payment, different simulated baselines.` visible outside it. Click the title or disclosure arrow to open or close the panel. Its controls remain rendered in either state, preserving the custom input, current-session review, and AI observation. The comparison explicitly separates **Payment facts**, **Simulated assumptions**, and **Rule results**:
+Open a completed payment with **Review payment**, then expand **Explore assumptions** and use **Compare baselines**. No formal rule analysis or AI request is needed to use the comparison. The outer panel is collapsed by default. The comparison keeps its inputs rendered and explicitly separates **Payment facts**, **Simulated assumptions**, and **Rule results**:
 
 **Payment evidence is unchanged. Only the simulated baseline changes.**
 
 - **Payment facts:** the selected order's actual amount, currency, and saved payment status remain fixed.
 - **Simulated assumptions:** demo baselines of 10, 5, and 2 use the order's currency. These are demonstration assumptions, not spending history or currency conversions. Enter a separate custom simulated baseline to add a custom scenario. The `Use baseline 10`, `Use baseline 5`, and `Use baseline 2` buttons include that currency in their labels and update only the independent custom scenario. The active preset is labeled explicitly; other manual values are labeled `Custom`. The controls state: `Simulation only — does not change or charge the payment.` Preset selections and manual values survive opening or closing the panel, and order-specific keys prevent inputs from being mixed between orders.
-- **Rule results:** each scenario calls the existing scoring functions and displays its amount ratio, rule score, and **Rule-based level**. The current `Selected scenario` is displayed immediately below the controls, before `Compare example assumptions`. The latter contains the three fixed demonstration cards, side by side on wide screens and stacked on narrow screens. Changing the selected scenario does not change those fixed examples. Invalid input replaces the selected result with an inline warning instead of leaving a stale result visible.
+- **Rule results:** each scenario calls the existing scoring functions and displays its amount ratio, rule score, and **Rule-based level**. The current `Your comparison result` is displayed immediately below the controls, before `Compare example assumptions`. The latter contains the three fixed demonstration cards, side by side on wide screens and stacked on narrow screens. Changing the selected scenario does not change those fixed examples. Invalid input replaces the selected result with an inline warning instead of leaving a stale result visible.
 
 For a fixed 10 CAD order:
 
@@ -142,11 +170,11 @@ Different actual amounts can produce different results; the presets do not guara
 
 Comparison inputs use separate `sensitivity_*` widget keys scoped to the order ID, amount, and currency. Changes calculate locally without requesting AI or PayPal, writing to the database, changing the payment target, or replacing the current-session review baseline, result, summary result, or AI observation. There is no action to apply a comparison baseline to that review. The session review remains in its own section with its own controls.
 
-The original hypothetical-amount What-if is retained under the default-collapsed `Advanced: hypothetical order amount` section after the review and AI cards. It still requires a current-session analysis and uses that analysis's original baseline; it does not use the comparison's custom baseline.
+The original hypothetical-amount What-if is retained in **Explore assumptions → Hypothetical amount**. It still requires a current-session rule analysis and uses that analysis's original baseline, not the comparison's custom baseline.
 
 ## AI review explanation cards
 
-Application-calculated metrics remain above the explanation cards. The three bordered cards appear side by side on wide screens and stack vertically at window widths of 900px or less. The secondary hypothetical-amount What-if is available in the collapsed advanced section below the cards.
+Application-calculated metrics remain in **Explore assumptions → Rule review**. The **AI rule explanation** entry is visible immediately after the payment overview, with a statement that it does not verify the payment or review notifications. The three bordered cards appear side by side on wide screens and stack vertically at window widths of 900px or less. The secondary hypothetical-amount What-if is available in the separate **Hypothetical amount** tab inside **Explore assumptions**.
 
 | Card | Content source | Purpose |
 | --- | --- | --- |
@@ -154,7 +182,7 @@ Application-calculated metrics remain above the explanation cards. The three bor
 | Limitations | Fixed application text | Explain that the baseline is simulated, the score is not a fraud probability, and AI text may be inaccurate |
 | Suggested checks | Fixed application text | Clearly labeled general suggestions for manual review, not findings about the payment or automatic actions |
 
-The cards appear after a rules-based analysis. Fixed guidance is available without an API call. Click `Generate AI Explanation` to request an observation; a `Generating observation...` loading indicator is shown while waiting. AI is never requested automatically when selecting an order, analyzing it, rerunning the page, or changing What-if inputs. The SDK is configured with no automatic retries. If a request fails, the previous observation is cleared, the rule results and fixed cards remain, and the button can be clicked again for a manual retry.
+The cards and manual generation button appear at that entry only when a valid analysis matches the opened payment, amount, currency, and current simulated baseline. Otherwise, a short message and **Open rule analysis** route the user to **Explore assumptions → Rule review**, with no automatic calculation or AI request. Payments that are not completed retain the existing analysis restriction. The entry explains only the original six analysis inputs, not the payment records. Fixed guidance is available without an API call. Click `Generate AI Explanation` to request an observation; a `Generating observation...` loading indicator is shown while waiting. AI is never requested automatically when selecting an order, analyzing it, rerunning the page, or changing What-if inputs. The SDK is configured with no automatic retries. If a request fails, the previous observation is cleared, the rule results and fixed cards remain, and the button can be clicked again for a manual retry.
 
 Only six business inputs are sent: **order amount, currency, simulated baseline, amount ratio, rule score, and rule level**. What-if values, order/Capture IDs, payer information, payment status, and timeline records are not added. The model is instructed not to invent spending history, infer fraud, recalculate metrics, or issue recommendations or payment instructions. Limitations and manual-check suggestions are supplied by the app, not generated by the model. The explanation has no payment actions attached.
 
@@ -168,9 +196,9 @@ The main area shows three step cards: **Order created**, **Buyer approved**, and
 - **Linked approval notification / Linked completion notification:** a corresponding notification is stored with an explicit reference to the selected order. The current order status or Capture ID alone does not produce either label.
 - **No linked record:** no attributable notification is stored for that step. This does not establish that the step never happened.
 
-Expand `Evidence details` to see the current local payment status, available Capture ID, and last local record update time. Order creation, buyer approval, and payment completion occurrence times display `Not recorded`, because provider timestamps are not persisted. An unavailable Capture ID or local timestamp is also marked explicitly. Definitions of timestamps, signature verification, and `LEGACY` records are kept in these collapsed details so the main summary stays brief.
+Expand `Record details` to see the current local payment status, available Capture ID, and last local record update time. Order creation, buyer approval, and payment completion occurrence times display `Not recorded`, because provider timestamps are not persisted. An unavailable Capture ID or local timestamp is also marked explicitly. Definitions of timestamps, signature verification, and `LEGACY` records are kept in these collapsed details so the main summary stays brief.
 
-Expand `Webhook records — local storage times` for the linked notifications. Rows are ordered by **Stored at (UTC)**, the local event insertion time, not by payment occurrence time. For new deliveries, this timestamp is recorded after signature verification; it is not the exact HTTP arrival time. **Local processed at (UTC)** is when the application decided whether to update the local order. Neither timestamp replaces a provider occurrence time or the order's separate last-update timestamp.
+Expand `Notification records` for the linked notifications. Rows are ordered by **Stored at (UTC)**, the local event insertion time, not by payment occurrence time. For new deliveries, this timestamp is recorded after signature verification; it is not the exact HTTP arrival time. **Local processed at (UTC)** is when the application decided whether to update the local order. Neither timestamp replaces a provider occurrence time or the order's separate last-update timestamp.
 
 | Stored processing state | Displayed local outcome | Meaning |
 | --- | --- | --- |
@@ -183,10 +211,11 @@ Unlinked `LEGACY` records cannot be assigned to an order and are excluded from t
 
 ## Manual walkthrough
 
-1. Complete the configuration and start the services. Use `Get Sandbox Access Token` to check Sandbox authentication if needed.
-2. Enter an amount in CAD, click `Create Sandbox Order`, follow the approval link using the Sandbox buyer account, and click `Capture Approved Order`.
-3. Wait for the local order to show `COMPLETED` and a Capture ID. Select the completed order, enter a simulated spending baseline, and click `Analyze Selected Order`.
-4. Use `Baseline sensitivity` to compare simulated baselines while keeping the actual amount fixed. The original hypothetical-amount What-if remains in `Advanced: hypothetical order amount`. With OpenAI configured, click `Generate AI Explanation` for an explanation of the current-session review, not the comparison scenarios. This calls an external API and may incur charges.
+1. Complete configuration and start the services. In **Sandbox tools**, expand **Authentication** and use `Get Sandbox Access Token` if an authentication check is needed.
+2. In that tools tab, enter a CAD amount, click `Create Sandbox Order`, approve it using the Sandbox buyer account, and return to **Sandbox tools** to click `Capture Approved Order`.
+3. In **Review payments**, select a saved payment and click **Review payment**. Read its saved payment status and supporting records without entering any simulated baseline. Buyer approval alone does not mean payment is complete; missing notifications alone do not mean it failed.
+4. For optional simulations on completed payments, expand **Explore assumptions**. Use **Compare baselines**, or enter a simulated comparison baseline in **Rule review** and click **Calculate rule result**. The **Hypothetical amount** tab then remains available.
+5. With OpenAI configured, click `Generate AI Explanation` at the **AI rule explanation** entry after the overview to explain that rule result, not the payment notifications or comparison scenarios. This calls an external API and may incur charges.
 
 If an order-creation result is uncertain, use `Retry Same Order Creation` to reuse the original key and amount. Click `Create New Sandbox Order` only when another order is explicitly intended. To recover an attempt after refreshing, retain the URL's `create_attempt` parameter and the local database. If Capture is uncertain, use `Check PayPal Order Status`; a timeout does not establish that payment failed.
 
@@ -200,7 +229,7 @@ After installing dependencies, run this from the project root. Real credentials,
 python -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 74 test methods: 26 original regression tests, 10 workbench page tests, 9 payment-evidence tests, 10 AI-review tests, 6 order-summary tests, and 13 baseline-sensitivity tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, preserving rule results during What-if changes or AI failures, English interface text, and accurate payment-completion notices. Evidence tests cover read-only queries, missing or older databases, separate time meanings, duplicate and out-of-order notifications, unlinked legacy records, and the distinction between current state and independent event evidence. AI-review tests cover the six-input boundary, invalid inputs, complete and incomplete responses, fixed card content, loading feedback, manual retries, and clearing stale observations without changing rule results or sending payment requests. Summary tests cover actual payment states, current-session results, fresh sessions, stale-review invalidation, escaped record text, and unchanged payment targeting. Sensitivity tests cover the demo outputs, custom inputs, threshold precision, invalid numeric values, order/currency/amount isolation, the collapsed legacy What-if, and unchanged review/AI/payment/database state with no external calls. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
+Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 93 test methods: 26 original regression tests, 10 workbench page tests, 9 payment-evidence tests, 10 AI-review tests, 6 order-summary tests, 13 baseline-sensitivity tests, 8 first-use tests, and 11 payment-expectation tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, preserving rule results during What-if changes or AI failures, English interface text, and accurate payment-completion notices. Evidence tests cover read-only queries, missing or older databases, separate time meanings, duplicate and out-of-order notifications, unlinked legacy records, and the distinction between current state and independent event evidence. AI-review tests cover the six-input boundary, invalid inputs, complete and incomplete responses, fixed card content, loading feedback, manual retries, and clearing stale observations without changing rule results or sending payment requests. Summary tests cover actual payment states, current-session results, fresh sessions, stale-review invalidation, escaped record text, and unchanged payment targeting. Sensitivity tests cover the demo outputs, custom inputs, threshold precision, invalid numeric values, order/currency/amount isolation, the optional hypothetical-amount tab, and unchanged review/AI/payment/database state with no external calls. First-use tests cover the empty-state route to Sandbox tools, explicit review activation, viewing every saved status without running rules, safe pending selections, unchanged payment targeting/data, hidden full identifiers, and the AI placement boundary. Payment-expectation tests cover exact decimal differences, currency mismatches, local-state warnings, refund/reversal precedence, uncertain Capture outcomes, input and record invalidation, pending selections, independent inputs, source disclosures, and unchanged rule/AI/payment/database state. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
 
 ## Current limitations
 
