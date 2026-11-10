@@ -1,6 +1,8 @@
 # PayGuard AI - Web Application
 # Day 3: First Streamlit Dashboard
 
+from html import escape
+
 import streamlit as st
 from ai_explanation import (
     AIExplanationError,
@@ -37,6 +39,120 @@ st.set_page_config(page_title="PayGuard AI | Order workbench", layout="wide")
 st.markdown(
     """
     <style>
+    .stApp, [data-testid="stAppViewContainer"] {
+        background: #f4f7fb;
+        color: #13263d;
+    }
+    [data-testid="stMainBlockContainer"] { max-width: 1520px; }
+    [data-testid="stSidebar"] {
+        background: #eaf0f7;
+        border-right: 1px solid #d7e2ee;
+    }
+    .stApp h1, .stApp h2, .stApp h3,
+    .stApp [data-testid="stMarkdownContainer"], .stApp label {
+        color: #13263d;
+        overflow-wrap: anywhere;
+    }
+    .stApp h1 { letter-spacing: -0.035em; }
+    .stApp h2 { font-size: 1.35rem; margin-top: 0.6rem; }
+    .stApp h3 { font-size: 1.1rem; }
+    .stApp [data-testid="stCaptionContainer"] { color: #526277; }
+    .stButton > button {
+        background: #0f766e;
+        color: #ffffff;
+        border: 1px solid #0f766e;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    .stButton > button:hover {
+        background: #115e59;
+        color: #ffffff;
+        border-color: #115e59;
+    }
+    .stButton > button [data-testid="stMarkdownContainer"] { color: inherit; }
+    .stButton > button:disabled {
+        background: #e5ebf1;
+        color: #526277;
+        border-color: #d7e2ee;
+    }
+    .stApp input, .stApp textarea,
+    .stApp [data-baseweb="select"] > div {
+        background: #ffffff;
+        color: #13263d;
+        border-radius: 10px;
+    }
+    [data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #d7e2ee;
+        border-radius: 12px;
+        padding: 0.85rem;
+    }
+    [data-testid="stMetricValue"] {
+        color: #13263d;
+        font-size: clamp(1.15rem, 2vw, 1.8rem);
+        overflow-wrap: anywhere;
+        white-space: normal;
+    }
+    .stApp [data-testid="stAlert"] { border-radius: 12px; }
+    .pg-summary {
+        background: #ffffff;
+        border: 1px solid #d7e2ee;
+        border-top: 4px solid #0f766e;
+        border-radius: 16px;
+        padding: 1.2rem;
+        margin: 0.3rem 0 1rem;
+        box-shadow: 0 5px 20px rgba(19, 38, 61, 0.05);
+    }
+    .pg-summary-grid {
+        display: grid;
+        grid-template-columns: 1.1fr 0.9fr 1fr;
+        gap: 1.1rem;
+        align-items: start;
+    }
+    .pg-summary .pg-label {
+        color: #526277;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin: 0 0 0.45rem;
+    }
+    .pg-summary .pg-order-id {
+        color: #526277;
+        font-size: 0.85rem;
+        margin: 0 0 1rem;
+        overflow-wrap: anywhere;
+    }
+    .pg-summary .pg-amount {
+        color: #13263d;
+        font-size: clamp(1.6rem, 2.6vw, 2.3rem);
+        font-weight: 750;
+        line-height: 1.2;
+        margin: 0;
+        overflow-wrap: anywhere;
+    }
+    .pg-summary .pg-currency { font-size: 0.95rem; font-weight: 600; }
+    .pg-summary .pg-badge {
+        display: inline-block;
+        max-width: 100%;
+        border-radius: 999px;
+        padding: 0.35rem 0.65rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+    .pg-summary .pg-paid { background: #d8f1e9; color: #075b43; }
+    .pg-summary .pg-pending { background: #e5edf7; color: #243e64; }
+    .pg-summary .pg-terminal { background: #fbe9e9; color: #8b2735; }
+    .pg-summary .pg-review {
+        color: #13263d;
+        font-size: 1.05rem;
+        font-weight: 700;
+        margin: 0;
+        overflow-wrap: anywhere;
+    }
+    .pg-summary .pg-note { color: #526277; font-size: 0.8rem; margin: 0.4rem 0 0; }
     .st-key-workbench table, .st-key-payment_evidence table {
         display: block;
         max-width: 100%;
@@ -44,6 +160,8 @@ st.markdown(
         white-space: nowrap;
     }
     @media (max-width: 900px) {
+        .pg-summary-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+        .pg-summary { padding: 1rem; }
         .st-key-workbench [data-testid="stHorizontalBlock"] {
             flex-direction: column !important;
         }
@@ -94,6 +212,32 @@ def clear_review():
         st.session_state.pop(key, None)
 
 
+def render_order_summary(order, analysis=None):
+    """Present stored payment status separately from the current session's rule result."""
+    status = order["status"]
+    status_class = "pg-paid" if status == "COMPLETED" else (
+        "pg-terminal" if status in {"DENIED", "REFUNDED", "REVERSED"} else "pg-pending"
+    )
+    review = "Not analyzed"
+    if analysis:
+        review = f"{analysis['risk_score']}/100 · {analysis['risk_level']}"
+    st.markdown(
+        '<section class="pg-summary" aria-label="Selected order summary">'
+        f'<p class="pg-order-id">Review order ID: {escape(order["order_id"])}</p>'
+        '<div class="pg-summary-grid">'
+        '<div><p class="pg-label">Order amount</p>'
+        f'<p class="pg-amount">{float(order["amount"]):.2f} '
+        f'<span class="pg-currency">{escape(order["currency"])}</span></p></div>'
+        '<div><p class="pg-label">Payment status</p>'
+        f'<span class="pg-badge {status_class}">{escape(status)}</span></div>'
+        '<div><p class="pg-label">Rule review</p>'
+        f'<p class="pg-review">{escape(review)}</p>'
+        '<p class="pg-note">Current session only · Not saved</p></div>'
+        '</div></section>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_review():
     st.subheader("Recent orders")
     st.caption("Up to 20 orders, sorted by local record update time. Review results are not stored.")
@@ -124,14 +268,12 @@ def render_review():
     )
     selected_order = orders_by_id[selected_order_id]
     st.subheader("Selected order review")
-    st.write(f"Review order ID: {selected_order_id}")
-    st.write(
-        f"{float(selected_order['amount']):.2f} {selected_order['currency']} "
-        f"| Payment status: {selected_order['status']}"
-    )
+    summary = st.container()
     st.caption("No saved review history. Any result shown below belongs to this session only.")
     if selected_order["status"] != "COMPLETED":
         clear_review()
+        with summary:
+            render_order_summary(selected_order)
         st.info("Review is available only for completed payments. No risk level is inferred for this order.")
         return selected_order
 
@@ -169,6 +311,11 @@ def render_review():
         st.session_state.pop("ai_explanation", None)
 
     analysis = st.session_state.get("risk_analysis")
+    with summary:
+        render_order_summary(
+            selected_order,
+            analysis if st.session_state.get("risk_analysis_signature") == analysis_signature else None,
+        )
     if analysis and st.session_state.get("risk_analysis_signature") == analysis_signature:
         st.subheader("Order Risk Analysis Result")
         st.caption("Current session review. This result is not saved.")
