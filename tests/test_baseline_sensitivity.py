@@ -48,8 +48,21 @@ class BaselineSensitivityTests(unittest.TestCase):
     def custom(self, app):
         return next(field for field in app.text_input if field.label.startswith("Custom simulated baseline"))
 
+    def section(self, app, title):
+        return next(
+            node for node in app.main
+            if hasattr(node, "children") and any(
+                getattr(child, "value", None) == f"**{title}**" for child in node.children.values()
+            )
+        )
+
     def scores(self, app):
-        return [metric.value for metric in app.metric if metric.label == "Rule score"]
+        if not any(item.value == "**Selected scenario**" for item in app.markdown):
+            return []
+        # Logical scenario assertions should not depend on the visual section order.
+        examples = self.section(app, "Compare example assumptions")
+        selected = self.section(app, "Selected scenario")
+        return [metric.value for section in (examples, selected) for metric in section.metric if metric.label == "Rule score"]
 
     def assert_no_requests(self):
         self.network.assert_not_called()
@@ -60,7 +73,7 @@ class BaselineSensitivityTests(unittest.TestCase):
     def test_ten_cad_demo_has_expected_ratios_scores_and_explicit_assumption_labels(self):
         app = self.app()
         self.assertEqual(self.scores(app), ["10/100", "50/100", "80/100", "10/100"])
-        self.assertEqual([metric.value for metric in app.metric if metric.label == "Amount ratio"], ["1×", "2×", "5×", "1×"])
+        self.assertEqual([metric.value for metric in self.section(app, "Compare example assumptions").metric if metric.label == "Amount ratio"], ["1×", "2×", "5×"])
         text = "\n".join(item.value for item in app.markdown)
         for heading in ("Payment facts", "Simulated assumptions", "Rule results"):
             self.assertIn(f"**{heading}**", text)
@@ -76,7 +89,7 @@ class BaselineSensitivityTests(unittest.TestCase):
         self.custom(app).set_value("4").run()
         self.assertFalse(app.exception)
         self.assertEqual(self.scores(app), ["10/100", "50/100", "80/100", "50/100"])
-        ratios = [metric.value for metric in app.metric if metric.label == "Amount ratio"]
+        ratios = [metric.value for metric in self.section(app, "Selected scenario").metric if metric.label == "Amount ratio"]
         self.assertEqual(ratios[-1], "2.5×")
         self.assertEqual(order_store.get_order("A")["amount"], "10.00")
         self.assert_no_requests()
@@ -136,12 +149,12 @@ class BaselineSensitivityTests(unittest.TestCase):
                 self.custom(app).set_value(baseline).run()
                 self.assertFalse(app.exception)
                 self.assertEqual(self.scores(app)[-1], score)
-                ratios = [metric.value for metric in app.metric if metric.label == "Amount ratio"]
+                ratios = [metric.value for metric in self.section(app, "Selected scenario").metric if metric.label == "Amount ratio"]
                 self.assertTrue(ratios[-1].startswith(ratio_prefix), ratios[-1])
         self.custom(app).set_value("0.00000001").run()
         self.assertFalse(app.exception)
         self.assertEqual(self.scores(app)[-1], "80/100")
-        self.assertTrue(any("Custom baseline: 1e-08 CAD" in item.value for item in app.markdown))
+        self.assertTrue(any("Selected baseline: 1e-08 CAD" in item.value for item in app.markdown))
         self.assert_no_requests()
 
     def test_sensitivity_input_is_scoped_to_order_amount_and_currency(self):
@@ -291,6 +304,25 @@ class BaselineSensitivityTests(unittest.TestCase):
         app.selectbox(key="review_order_id").select("A").run()
         self.assertNotEqual(self.custom(app).value, "5")
         self.assertIn("CAD", self.custom(app).label)
+        self.assert_no_requests()
+
+    def test_selected_scenario_is_first_and_invalid_input_clears_only_its_result(self):
+        app = self.app()
+        headings = [item.value for item in app.markdown]
+        self.assertLess(headings.index("**Selected scenario**"), headings.index("**Compare example assumptions**"))
+        next(button for button in app.button if button.label == "Use baseline 5 CAD").click().run()
+        selected = self.section(app, "Selected scenario")
+        self.assertEqual([item.value for item in selected.metric if item.label == "Rule score"], ["50/100"])
+        self.custom(app).set_value("invalid").run()
+        self.assertFalse(app.exception)
+        selected = self.section(app, "Selected scenario")
+        self.assertFalse(selected.metric)
+        self.assertTrue(selected.warning)
+        self.assertFalse(any("Selected baseline:" in item.value for item in selected.markdown))
+        self.assertEqual(self.scores(app), ["10/100", "50/100", "80/100"])
+        self.assertTrue(any("Fixed demonstration examples" in item.value for item in self.section(app, "Compare example assumptions").caption))
+        next(button for button in app.button if button.label == "Use baseline 2 CAD").click().run()
+        self.assertEqual(self.scores(app)[-1], "80/100")
         self.assert_no_requests()
 
 

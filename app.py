@@ -181,7 +181,33 @@ st.markdown(
         color: #0f766e;
         flex-shrink: 0;
     }
+    .pg-evidence-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin: 0.5rem 0 1rem;
+    }
+    .pg-evidence-card {
+        background: #ffffff;
+        border: 1px solid #d7e2ee;
+        border-radius: 14px;
+        padding: 1rem;
+        min-width: 0;
+    }
+    .pg-evidence-number { color: #526277; font-size: 0.8rem; font-weight: 700; }
+    .pg-evidence-status {
+        display: inline-block;
+        max-width: 100%;
+        border-radius: 10px;
+        padding: 0.4rem 0.65rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+    }
+    .pg-evidence-linked { background: #d8f1e9; color: #075b43; }
+    .pg-evidence-neutral { background: #e5edf7; color: #243e64; }
     @media (max-width: 900px) {
+        .pg-evidence-grid { grid-template-columns: minmax(0, 1fr); }
         .pg-summary-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
         .pg-summary { padding: 1rem; }
         .st-key-workbench [data-testid="stHorizontalBlock"] {
@@ -198,7 +224,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("PayGuard AI")
-st.write("Post-payment review assistant")
+st.write("Review payment facts. Compare simulated assumptions.")
 st.caption("Sandbox test environment. Rules-based scores are not fraud probabilities or PayPal risk decisions.")
 
 returned_order_id = st.query_params.get("token")
@@ -346,14 +372,19 @@ def render_baseline_sensitivity(order):
 
             st.markdown("**Rule results**")
             st.caption("Simulation only. These results do not update the current session review, AI observation, or payment target.")
-            columns = st.columns(3, gap="small")
-            for column, baseline in zip(columns, (10.0, 5.0, 2.0)):
-                with column:
-                    result_card("Demo baseline", baseline, scenario(baseline))
-            if custom:
-                result_card("Custom baseline", custom[0], custom[1])
-            else:
-                st.warning(custom_error)
+            with st.container(key="selected_scenario"):
+                st.markdown("**Selected scenario**")
+                if custom:
+                    result_card("Selected baseline", custom[0], custom[1])
+                else:
+                    st.warning(custom_error)
+            with st.container(key="example_assumptions"):
+                st.markdown("**Compare example assumptions**")
+                st.caption("Fixed demonstration examples — not historical data. These examples do not change when you select a scenario.")
+                columns = st.columns(3, gap="small")
+                for column, baseline in zip(columns, (10.0, 5.0, 2.0)):
+                    with column:
+                        result_card("Demo baseline", baseline, scenario(baseline))
 
 
 def render_review():
@@ -712,13 +743,21 @@ with st.container(key="payment_evidence"):
         }
         approval_evidence = "Linked approval notification" if "CHECKOUT.ORDER.APPROVED" in linked_types else "No linked record"
         completion_evidence = "Linked completion notification" if "PAYMENT.CAPTURE.COMPLETED" in linked_types else "No linked record"
-        st.markdown(
-            "| Step | Evidence status |\n"
-            "| --- | --- |\n"
-            "| Order created | Local order record only |\n"
-            f"| Buyer approved | {approval_evidence} |\n"
-            f"| Payment completed | {completion_evidence} |"
+        steps = (
+            ("01", "Order created", "Local order record only", False),
+            ("02", "Buyer approved", approval_evidence, "CHECKOUT.ORDER.APPROVED" in linked_types),
+            ("03", "Payment completed", completion_evidence, "PAYMENT.CAPTURE.COMPLETED" in linked_types),
         )
+        cards = ['<div class="pg-evidence-grid" aria-label="Payment workflow evidence">']
+        for step, title, evidence, linked in steps:
+            tone = "pg-evidence-linked" if linked else "pg-evidence-neutral"
+            cards.append(
+                '<section class="pg-evidence-card">'
+                f'<p class="pg-evidence-number">{step}</p><h3>{title}</h3>'
+                f'<span class="pg-evidence-status {tone}">{escape(evidence)}</span></section>'
+            )
+        cards.append('</div>')
+        st.markdown("".join(cards), unsafe_allow_html=True)
         st.caption(
             "Evidence comes from saved records. A missing record does not mean a step was skipped."
         )

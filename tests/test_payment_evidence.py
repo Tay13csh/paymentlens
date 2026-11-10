@@ -51,7 +51,7 @@ class PaymentEvidenceTests(unittest.TestCase):
         return app
 
     def steps(self, app):
-        return next(item.value for item in app.markdown if item.value.startswith("| Step |"))
+        return next(item.value for item in app.markdown if item.value.startswith('<div class="pg-evidence-grid"'))
 
     def webhook_table(self, app):
         return next(item.value for item in app.markdown if item.value.startswith("| Event ID |"))
@@ -92,9 +92,12 @@ class PaymentEvidenceTests(unittest.TestCase):
         self.save(status="COMPLETED")
         app = self.app()
         steps = self.steps(app)
-        self.assertIn("| Order created | Local order record only |", steps)
-        self.assertIn("| Buyer approved | No linked record |", steps)
-        self.assertIn("| Payment completed | No linked record |", steps)
+        self.assertIn("<h3>Order created</h3>", steps)
+        self.assertIn("pg-evidence-neutral\">Local order record only", steps)
+        self.assertIn("<h3>Buyer approved</h3>", steps)
+        self.assertIn("pg-evidence-neutral\">No linked record", steps)
+        self.assertIn("<h3>Payment completed</h3>", steps)
+        self.assertEqual(steps.count("No linked record"), 2)
         self.assertNotIn("Not recorded", steps)
         details = next(item for item in app.expander if item.label == "Evidence details")
         self.assertFalse(details.proto.expanded)
@@ -173,16 +176,30 @@ class PaymentEvidenceTests(unittest.TestCase):
         app.selectbox(key="review_order_id").select("WITH-EVIDENCE").run()
         self.assertIn("Linked approval notification", self.steps(app))
         app.selectbox(key="review_order_id").select("NO-EVIDENCE").run()
-        self.assertIn("| Buyer approved | No linked record |", self.steps(app))
-        self.assertIn("| Payment completed | No linked record |", self.steps(app))
+        self.assertIn("<h3>Buyer approved</h3>", self.steps(app))
+        self.assertEqual(self.steps(app).count("No linked record"), 2)
         self.assertFalse(any(item.value.startswith("| Event ID |") for item in app.markdown))
         self.assertEqual(app.session_state["paypal_order_id"], "WITH-EVIDENCE")
         self.assert_no_requests()
 
     def test_empty_workbench_explains_how_to_view_evidence(self):
         app = self.app()
-        self.assertFalse(any(item.value.startswith("| Step |") for item in app.markdown))
+        self.assertFalse(any(item.value.startswith('<div class="pg-evidence-grid"') for item in app.markdown))
         self.assertTrue(any("Select a saved order to view payment flow evidence" in item.value for item in app.info))
+        self.assert_no_requests()
+
+    def test_three_step_cards_use_neutral_missing_evidence_not_failure(self):
+        self.save()
+        order_store.record_webhook_event(self.event("APPROVAL", event_type="CHECKOUT.ORDER.APPROVED"))
+        app = self.app()
+        cards = self.steps(app)
+        self.assertEqual(cards.count('<section class="pg-evidence-card">'), 3)
+        self.assertEqual(cards.count("pg-evidence-linked"), 1)
+        self.assertEqual(cards.count("pg-evidence-neutral"), 2)
+        self.assertIn("Linked approval notification", cards)
+        self.assertIn("No linked record", cards)
+        self.assertNotIn("failure", cards.lower())
+        self.assertNotIn("Not recorded", cards)
         self.assert_no_requests()
 
 

@@ -158,7 +158,7 @@ class OrderWorkbenchTests(unittest.TestCase):
     def test_project_interface_uses_english_subtitle_and_text(self):
         self.save("REVIEW")
         app = self.app()
-        self.assertTrue(any(item.value == "Post-payment review assistant" for item in app.markdown))
+        self.assertTrue(any(item.value == "Review payment facts. Compare simulated assumptions." for item in app.markdown))
         text = "\n".join(
             item.value for kind in ("title", "subheader", "markdown", "caption", "info", "warning", "error", "success")
             for item in getattr(app, kind)
