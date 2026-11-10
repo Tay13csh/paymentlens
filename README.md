@@ -9,7 +9,7 @@ A local prototype of a post-payment review assistant for small merchants, built 
 - Sandbox OAuth, order creation, buyer approval, Capture, and SQLite persistence.
 - A saved request key and amount for order-creation retries; duplicate-Capture protection and status checks when a Capture result is uncertain.
 - Webhook signature verification, event deduplication, pending storage for unmatched events, and automatic processing when the corresponding order is saved.
-- Rules-based review of completed orders. What-if simulations change neither saved orders nor payments.
+- Rules-based review of completed orders, with an independent baseline-sensitivity comparison. Simulations change neither saved orders nor payments.
 - Three English review cards: AI-generated Observations, fixed Limitations, and fixed Suggested checks. The AI request includes only the amount, currency, simulated baseline, and rule metrics, without order IDs, email addresses, timeline data, or PayPal credentials.
 
 Amount ratio = order amount / simulated spending baseline:
@@ -120,9 +120,33 @@ The interface uses navy text, teal actions, light backgrounds, rounded cards, an
 
 The workbench uses the existing payment, database, scoring, AI, and Webhook backend logic. Other planned enhancements are not implemented in this version.
 
+## Baseline sensitivity comparison
+
+Select a completed order to use `Baseline sensitivity — compare assumptions` below its summary, even before running the current-session review. The panel is collapsed by default, with the hint `Same payment, different simulated baselines.` visible outside it. Click the title or disclosure arrow to open or close the panel. Its controls remain rendered in either state, preserving the custom input, current-session review, and AI observation. The comparison explicitly separates **Payment facts**, **Simulated assumptions**, and **Rule results**:
+
+**Payment evidence is unchanged. Only the simulated baseline changes.**
+
+- **Payment facts:** the selected order's actual amount, currency, and saved payment status remain fixed.
+- **Simulated assumptions:** demo baselines of 10, 5, and 2 use the order's currency. These are demonstration assumptions, not spending history or currency conversions. Enter a separate custom simulated baseline to add a custom scenario. The `Use baseline 10`, `Use baseline 5`, and `Use baseline 2` buttons include that currency in their labels and update only the independent custom scenario. The active preset is labeled explicitly; other manual values are labeled `Custom`. The controls state: `Simulation only — does not change or charge the payment.` Preset selections and manual values survive opening or closing the panel, and order-specific keys prevent inputs from being mixed between orders.
+- **Rule results:** each scenario calls the existing scoring functions and displays its amount ratio, rule score, and **Rule-based level**. Preset cards appear side by side on wide screens and stack vertically on narrow screens; the custom scenario appears below them.
+
+For a fixed 10 CAD order:
+
+| Demo baseline | Amount ratio | Rule score | Rule-based level |
+| --- | --- | --- | --- |
+| 10 CAD | 1x | 10/100 | Low Risk |
+| 5 CAD | 2x | 50/100 | Medium Risk |
+| 2 CAD | 5x | 80/100 | High Risk |
+
+Different actual amounts can produce different results; the presets do not guarantee that all three levels will appear. Custom baselines must be finite positive numbers within the existing floating-point rules' supported range. Inputs that lose decimal precision when converted to that range are rejected rather than silently changed. Baselines and ratios retain round-trip floating-point precision, using scientific notation when needed, so a tiny positive baseline is not displayed as zero and a ratio just below a rule threshold is not rounded up to that threshold.
+
+Comparison inputs use separate `sensitivity_*` widget keys scoped to the order ID, amount, and currency. Changes calculate locally without requesting AI or PayPal, writing to the database, changing the payment target, or replacing the current-session review baseline, result, summary result, or AI observation. There is no action to apply a comparison baseline to that review. The session review remains in its own section with its own controls.
+
+The original hypothetical-amount What-if is retained under the default-collapsed `Advanced: hypothetical order amount` section after the review and AI cards. It still requires a current-session analysis and uses that analysis's original baseline; it does not use the comparison's custom baseline.
+
 ## AI review explanation cards
 
-Application-calculated metrics remain above the explanation cards. The three bordered cards appear side by side on wide screens and stack vertically at window widths of 900px or less. What-if remains below the cards.
+Application-calculated metrics remain above the explanation cards. The three bordered cards appear side by side on wide screens and stack vertically at window widths of 900px or less. The secondary hypothetical-amount What-if is available in the collapsed advanced section below the cards.
 
 | Card | Content source | Purpose |
 | --- | --- | --- |
@@ -162,7 +186,7 @@ Unlinked `LEGACY` records cannot be assigned to an order and are excluded from t
 1. Complete the configuration and start the services. Use `Get Sandbox Access Token` to check Sandbox authentication if needed.
 2. Enter an amount in CAD, click `Create Sandbox Order`, follow the approval link using the Sandbox buyer account, and click `Capture Approved Order`.
 3. Wait for the local order to show `COMPLETED` and a Capture ID. Select the completed order, enter a simulated spending baseline, and click `Analyze Selected Order`.
-4. Use What-if to compare hypothetical amounts. With OpenAI configured, click `Generate AI Explanation` for an explanation. This calls an external API and may incur charges.
+4. Use `Baseline sensitivity` to compare simulated baselines while keeping the actual amount fixed. The original hypothetical-amount What-if remains in `Advanced: hypothetical order amount`. With OpenAI configured, click `Generate AI Explanation` for an explanation of the current-session review, not the comparison scenarios. This calls an external API and may incur charges.
 
 If an order-creation result is uncertain, use `Retry Same Order Creation` to reuse the original key and amount. Click `Create New Sandbox Order` only when another order is explicitly intended. To recover an attempt after refreshing, retain the URL's `create_attempt` parameter and the local database. If Capture is uncertain, use `Check PayPal Order Status`; a timeout does not establish that payment failed.
 
@@ -176,7 +200,7 @@ After installing dependencies, run this from the project root. Real credentials,
 python -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 60 test methods: 26 original regression tests, 10 workbench page tests, 8 payment-evidence tests, 10 AI-review tests, and 6 order-summary tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, preserving rule results during What-if changes or AI failures, English interface text, and accurate payment-completion notices. Evidence tests cover read-only queries, missing or older databases, separate time meanings, duplicate and out-of-order notifications, unlinked legacy records, and the distinction between current state and independent event evidence. AI-review tests cover the six-input boundary, invalid inputs, complete and incomplete responses, fixed card content, loading feedback, manual retries, and clearing stale observations without changing rule results or sending payment requests. Summary tests cover actual payment states, current-session results, fresh sessions, stale-review invalidation, escaped record text, and unchanged payment targeting. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
+Tests use temporary SQLite databases, synthetic credentials, and mocked responses without operating on the project's real database. There are currently 72 test methods: 26 original regression tests, 10 workbench page tests, 8 payment-evidence tests, 10 AI-review tests, 6 order-summary tests, and 12 baseline-sensitivity tests. Test counts do not represent real Sandbox verification runs. Page tests cover empty lists, different payment states, isolation between browsing and payment targets, clearing stale review results, preserving rule results during What-if changes or AI failures, English interface text, and accurate payment-completion notices. Evidence tests cover read-only queries, missing or older databases, separate time meanings, duplicate and out-of-order notifications, unlinked legacy records, and the distinction between current state and independent event evidence. AI-review tests cover the six-input boundary, invalid inputs, complete and incomplete responses, fixed card content, loading feedback, manual retries, and clearing stale observations without changing rule results or sending payment requests. Summary tests cover actual payment states, current-session results, fresh sessions, stale-review invalidation, escaped record text, and unchanged payment targeting. Sensitivity tests cover the demo outputs, custom inputs, threshold precision, invalid numeric values, order/currency/amount isolation, the collapsed legacy What-if, and unchanged review/AI/payment/database state with no external calls. The terminal may print learning examples from `risk.py` and environment warnings; use unittest's final `OK` or `FAILED` as the result.
 
 ## Current limitations
 

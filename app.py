@@ -1,7 +1,9 @@
 # PayGuard AI - Web Application
 # Day 3: First Streamlit Dashboard
 
+from decimal import Decimal, InvalidOperation
 from html import escape
+import math
 
 import streamlit as st
 from ai_explanation import (
@@ -159,6 +161,26 @@ st.markdown(
         overflow-x: auto;
         white-space: nowrap;
     }
+    .st-key-sensitivity_comparison [data-testid="stExpander"] summary {
+        cursor: pointer;
+        background: #eaf0f7;
+        color: #13263d;
+        border-radius: 10px;
+        padding: 0.85rem 1rem;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+    }
+    .st-key-sensitivity_comparison [data-testid="stExpander"] summary:hover {
+        background: #d8f1e9;
+    }
+    .st-key-sensitivity_comparison [data-testid="stExpander"] summary:focus-visible {
+        outline: 3px solid #0f766e;
+        outline-offset: 3px;
+    }
+    .st-key-sensitivity_comparison [data-testid="stExpander"] summary svg {
+        color: #0f766e;
+        flex-shrink: 0;
+    }
     @media (max-width: 900px) {
         .pg-summary-grid { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
         .pg-summary { padding: 1rem; }
@@ -238,6 +260,102 @@ def render_order_summary(order, analysis=None):
     )
 
 
+def render_baseline_sensitivity(order):
+    """Calculate display-only scenarios without touching review or payment state."""
+    amount = float(order["amount"])
+    currency = order["currency"]
+
+    def number(value):
+        # Keep the float's round-trip precision, especially near rule thresholds.
+        text = repr(float(value))
+        return text[:-2] if text.endswith(".0") else text
+
+    def scenario(baseline):
+        ratio = transaction_ratio(amount, baseline)
+        if not math.isfinite(ratio):
+            raise ValueError("The amount ratio is outside the supported numeric range.")
+        score = calculate_score(amount, baseline)
+        return ratio, score, risk_level(score)
+
+    def result_card(label, baseline, result):
+        ratio, score, level = result
+        with st.container(border=True):
+            st.markdown(f"**{label}: {number(baseline)} {escape(currency)}**")
+            st.metric("Amount ratio", f"{number(ratio)}×")
+            st.metric("Rule score", f"{score}/100")
+            st.markdown(f"Rule-based level: **{level}**")
+
+    with st.container(key="sensitivity_comparison"):
+        st.caption("Same payment, different simulated baselines.")
+        with st.expander("Baseline sensitivity — compare assumptions", expanded=False):
+            st.markdown("**Payment evidence is unchanged. Only the simulated baseline changes.**")
+            st.markdown("**Payment facts**")
+            st.write(f"Actual order amount: {amount:.2f} {currency} | Payment status: {order['status']}")
+            st.caption("The saved order amount and currency are fixed in this comparison.")
+            st.markdown("**Simulated assumptions**")
+            st.caption(
+                "Demo baselines: 10, 5, and 2 in the order currency. These are demonstration assumptions, "
+                "not historical spending data. No currency conversion is performed."
+            )
+            input_key = f"sensitivity_baseline_{order['order_id']}_{order['amount']}_{currency}"
+            if input_key not in st.session_state:
+                st.session_state[input_key] = "10"
+
+            def use_baseline(key, value):
+                st.session_state[key] = value
+
+            selected_preset = None
+            try:
+                selected_value = Decimal(st.session_state[input_key].strip())
+                if selected_value.is_finite():
+                    selected_preset = next((value for value in (10, 5, 2) if selected_value == value), None)
+            except InvalidOperation:
+                pass
+            preset_columns = st.columns(3, gap="small")
+            for column, value in zip(preset_columns, (10, 5, 2)):
+                with column:
+                    st.button(
+                        f"Use baseline {value} {currency}",
+                        key=f"{input_key}_preset_{value}",
+                        type="primary" if selected_preset == value else "secondary",
+                        on_click=use_baseline,
+                        args=(input_key, str(value)),
+                    )
+            st.caption("Simulation only — does not change or charge the payment.")
+            st.markdown(f"**Selected preset: {selected_preset} {escape(currency)}**" if selected_preset else "**Custom**")
+            raw_baseline = st.text_input(
+                f"Custom simulated baseline ({currency})",
+                key=input_key,
+            )
+            custom = None
+            custom_error = None
+            try:
+                decimal_baseline = Decimal(raw_baseline.strip())
+                if not decimal_baseline.is_finite() or decimal_baseline <= 0:
+                    raise ValueError("Enter a finite simulated baseline greater than zero.")
+                baseline = float(decimal_baseline)
+                if not math.isfinite(baseline) or baseline <= 0:
+                    raise ValueError("The baseline is outside the supported numeric range.")
+                if Decimal(str(baseline)) != decimal_baseline:
+                    raise ValueError("Use fewer significant digits; the current rules cannot preserve this baseline's precision.")
+                custom = (baseline, scenario(baseline))
+            except InvalidOperation:
+                custom_error = "Enter a numeric simulated baseline greater than zero."
+            except (ValueError, OverflowError) as error:
+                custom_error = str(error)
+
+            st.markdown("**Rule results**")
+            st.caption("Simulation only. These results do not update the current session review, AI observation, or payment target.")
+            columns = st.columns(3, gap="small")
+            for column, baseline in zip(columns, (10.0, 5.0, 2.0)):
+                with column:
+                    result_card("Demo baseline", baseline, scenario(baseline))
+            if custom:
+                result_card("Custom baseline", custom[0], custom[1])
+            else:
+                st.warning(custom_error)
+
+
 def render_review():
     st.subheader("Recent orders")
     st.caption("Up to 20 orders, sorted by local record update time. Review results are not stored.")
@@ -276,6 +394,10 @@ def render_review():
             render_order_summary(selected_order)
         st.info("Review is available only for completed payments. No risk level is inferred for this order.")
         return selected_order
+
+    render_baseline_sensitivity(selected_order)
+    st.subheader("Current session review")
+    st.caption("The comparison above does not change this review's baseline or results.")
 
     order_amount = float(selected_order["amount"])
     currency = selected_order["currency"]
@@ -380,44 +502,45 @@ def render_review():
                     for suggestion in GENERAL_SUGGESTED_CHECKS:
                         st.write(f"- {suggestion}")
 
-        st.subheader("What-if Scenario Simulation")
-        st.caption("Simulation only. This does not change the saved order or trigger a payment.")
-        hypothetical_amount = st.number_input(
-            f"Hypothetical Order Amount ({analysis['currency']})",
-            min_value=0.0,
-            value=analysis["order_amount"],
-            step=1.00,
-            key=f"what_if_amount_{analysis['order_id']}_{analysis['simulated_baseline']:.2f}",
-        )
-        hypothetical_ratio = transaction_ratio(
-            hypothetical_amount,
-            analysis["simulated_baseline"],
-        )
-        hypothetical_score = calculate_score(
-            hypothetical_amount,
-            analysis["simulated_baseline"],
-        )
-        hypothetical_level = risk_level(hypothetical_score)
-        score_change = hypothetical_score - analysis["risk_score"]
+        with st.expander("Advanced: hypothetical order amount", expanded=False):
+            st.subheader("What-if Scenario Simulation")
+            st.caption("Simulation only. This does not change the saved order or trigger a payment.")
+            hypothetical_amount = st.number_input(
+                f"Hypothetical Order Amount ({analysis['currency']})",
+                min_value=0.0,
+                value=analysis["order_amount"],
+                step=1.00,
+                key=f"what_if_amount_{analysis['order_id']}_{analysis['simulated_baseline']:.2f}",
+            )
+            hypothetical_ratio = transaction_ratio(
+                hypothetical_amount,
+                analysis["simulated_baseline"],
+            )
+            hypothetical_score = calculate_score(
+                hypothetical_amount,
+                analysis["simulated_baseline"],
+            )
+            hypothetical_level = risk_level(hypothetical_score)
+            score_change = hypothetical_score - analysis["risk_score"]
 
-        st.caption(
-            f"Both results use the same simulated baseline: "
-            f"{analysis['simulated_baseline']:.2f} {analysis['currency']}."
-        )
-        original_column, hypothetical_column = st.columns(2)
-        with original_column:
-            st.markdown("**Original Completed Order**")
-            st.metric("Amount", f"{analysis['order_amount']:.2f} {analysis['currency']}")
-            st.metric("Amount Ratio", f"{analysis['amount_ratio']:.2f}x")
-            st.metric("Risk Score", f"{analysis['risk_score']}/100")
-            st.metric("Risk Level", analysis["risk_level"])
-        with hypothetical_column:
-            st.markdown("**Hypothetical Scenario**")
-            st.metric("Amount", f"{hypothetical_amount:.2f} {analysis['currency']}")
-            st.metric("Amount Ratio", f"{hypothetical_ratio:.2f}x")
-            st.metric("Risk Score", f"{hypothetical_score}/100")
-            st.metric("Risk Level", hypothetical_level)
-        st.metric("Score Change", f"{score_change:+d} points")
+            st.caption(
+                f"Both results use the same simulated baseline: "
+                f"{analysis['simulated_baseline']:.2f} {analysis['currency']}."
+            )
+            original_column, hypothetical_column = st.columns(2)
+            with original_column:
+                st.markdown("**Original Completed Order**")
+                st.metric("Amount", f"{analysis['order_amount']:.2f} {analysis['currency']}")
+                st.metric("Amount Ratio", f"{analysis['amount_ratio']:.2f}x")
+                st.metric("Risk Score", f"{analysis['risk_score']}/100")
+                st.metric("Risk Level", analysis["risk_level"])
+            with hypothetical_column:
+                st.markdown("**Hypothetical Scenario**")
+                st.metric("Amount", f"{hypothetical_amount:.2f} {analysis['currency']}")
+                st.metric("Amount Ratio", f"{hypothetical_ratio:.2f}x")
+                st.metric("Risk Score", f"{hypothetical_score}/100")
+                st.metric("Risk Level", hypothetical_level)
+            st.metric("Score Change", f"{score_change:+d} points")
 
     return selected_order
 
