@@ -2,7 +2,13 @@
 # Day 3: First Streamlit Dashboard
 
 import streamlit as st
-from ai_explanation import AIExplanationError, DEFAULT_MODEL, explain_order_risk
+from ai_explanation import (
+    AIExplanationError,
+    DEFAULT_MODEL,
+    GENERAL_SUGGESTED_CHECKS,
+    REVIEW_LIMITATIONS,
+    explain_order_risk,
+)
 from risk import calculate_score, risk_level, transaction_ratio
 from paypal_auth import (
     PayPalAuthError,
@@ -183,6 +189,50 @@ def render_review():
             "and does not represent a probability of fraud."
         )
 
+        st.subheader("Review explanation")
+        st.caption("The metrics above come from the application. Only Observations uses AI; requests and retries are manual.")
+        if st.button("Generate AI Explanation", key="generate_ai_explanation"):
+            st.session_state.pop("ai_explanation", None)
+            try:
+                openai_config = st.secrets["openai"]
+                api_key = openai_config["api_key"]
+                model = openai_config.get("model", DEFAULT_MODEL)
+                with st.spinner("Generating observation..."):
+                    st.session_state["ai_explanation"] = explain_order_risk(
+                        api_key=api_key,
+                        model=model,
+                        order_amount=analysis["order_amount"],
+                        currency=analysis["currency"],
+                        simulated_baseline=analysis["simulated_baseline"],
+                        amount_ratio=analysis["amount_ratio"],
+                        risk_score=analysis["risk_score"],
+                        risk_level=analysis["risk_level"],
+                    )
+            except AIExplanationError as error:
+                st.error(str(error))
+            except Exception:
+                st.error("AI explanation is unavailable. Check the local [openai] settings and try again.")
+
+        with st.container(key="ai_review_cards"):
+            observation_card, limitations_card, checks_card = st.columns(3, gap="small")
+            with observation_card:
+                with st.container(border=True):
+                    st.markdown("### Observations")
+                    if "ai_explanation" in st.session_state:
+                        st.write(st.session_state["ai_explanation"])
+                    else:
+                        st.caption("Click Generate AI Explanation to request an observation. You can click again to retry.")
+            with limitations_card:
+                with st.container(border=True):
+                    st.markdown("### Limitations")
+                    st.write(REVIEW_LIMITATIONS)
+            with checks_card:
+                with st.container(border=True):
+                    st.markdown("### Suggested checks")
+                    st.caption("General suggestions for manual review, not findings about this payment.")
+                    for suggestion in GENERAL_SUGGESTED_CHECKS:
+                        st.write(f"- {suggestion}")
+
         st.subheader("What-if Scenario Simulation")
         st.caption("Simulation only. This does not change the saved order or trigger a payment.")
         hypothetical_amount = st.number_input(
@@ -222,29 +272,6 @@ def render_review():
             st.metric("Risk Level", hypothetical_level)
         st.metric("Score Change", f"{score_change:+d} points")
 
-        if st.button("Generate AI Explanation", key="generate_ai_explanation"):
-            st.session_state.pop("ai_explanation", None)
-            try:
-                openai_config = st.secrets["openai"]
-                api_key = openai_config["api_key"]
-                model = openai_config.get("model", DEFAULT_MODEL)
-                st.session_state["ai_explanation"] = explain_order_risk(
-                    api_key=api_key,
-                    model=model,
-                    order_amount=analysis["order_amount"],
-                    currency=analysis["currency"],
-                    simulated_baseline=analysis["simulated_baseline"],
-                    amount_ratio=analysis["amount_ratio"],
-                    risk_score=analysis["risk_score"],
-                    risk_level=analysis["risk_level"],
-                )
-            except AIExplanationError as error:
-                st.error(str(error))
-            except Exception:
-                st.error("AI explanation is unavailable. Check the local [openai] settings and try again.")
-
-        if "ai_explanation" in st.session_state:
-            st.markdown(st.session_state["ai_explanation"])
     return selected_order
 
 
