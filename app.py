@@ -1170,7 +1170,8 @@ def render_payment_records(selected_order, description):
                     "No linked record means no attributable notification is stored, not that the step did not happen."
                 )
                 st.caption(
-                    "Provider occurrence times are not stored. Local record update time is not the payment completion time. "
+                    "Missing step times remain Not recorded. Capture evidence separately saves provider creation time when available; "
+                    "it is not a payment-completion or bank-settlement time. Local record update time is not the payment completion time. "
                     "Steps are shown in workflow order, not a reconstructed chronology."
                 )
                 st.caption(

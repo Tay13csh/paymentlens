@@ -23,7 +23,9 @@ Amount ratio = order amount / simulated spending baseline:
 ## Validation status
 
 - **The normal Sandbox flow has been manually verified**: local order creation, buyer approval, Capture, saved order records, and receipt of a real Webhook. This includes a notification returning `processed: false` when the order was already completed. These are the maintainer's manual checks, not an automated end-to-end check performed on every run.
+- **The user manually verified the linked Handmade mug Sandbox payment**: the merchant expectation of 10 CAD matched the independently returned Capture amount and currency, and the saved result remained after a page refresh. This is a reported manual check, not an automated end-to-end test or confirmation of bank settlement.
 - **Failure and edge cases are primarily covered by offline tests**: timeout retries, duplicate events, events arriving before orders, transaction rollback, capacity limits, legacy database migration, and protection of refunded or reversed states.
+- **Full wide- and narrow-screen acceptance remains pending.**
 - **Webhook Simulator delivery has not yet been confirmed.** Offline mock events do not establish Simulator delivery or real signature verification. Do not disable signature verification for testing.
 
 ## Requirements and installation
@@ -112,7 +114,7 @@ The state-controlled **Workspace** navigation switches between `Review payments`
 
 1. Use `Select a payment` below the recent-payments list, then click **Review payment**.
 2. Read **Payment overview** for the amount, currency, and payment status from the saved local record. This is not a live PayPal query. The overview does not show a rule score or require analysis.
-   Use **Check payment against your expectation** below it: enter the expected amount and currency, then click **Check payment**. No rule analysis or AI call is needed.
+   For a linked merchant sales order, **Merchant reconciliation** automatically compares its saved merchant terms with independent Capture evidence. Only unlinked historical orders use **Check payment against your expectation**: enter an expected amount and currency, then click **Check payment** to compare against the recorded order amount. Neither path requires rule analysis or AI.
 3. The default-visible **AI rule explanation** entry after the overview explains simulated rules only, not payment verification. Without a valid rule result, **Open rule analysis** expands **Simulated rule analysis** in that same AI area without calculating or requesting AI. Read **Payment records** for the linked evidence, and its reminder that missing notifications do not mean payment failed. Timestamp definitions remain in details.
 4. Expand **Record details** for full identifiers and timestamp definitions, or **Notification records** for the event table and local processing outcomes.
 5. Optionally expand **Explore assumptions** to compare simulated baselines or explore a hypothetical amount. These tools are not required for record viewing.
@@ -152,7 +154,7 @@ A still-existing selected payment remains selected by its full ID when the filte
 
 ## Check a payment against your expectation
 
-Open a payment, enter your expected amount and currency, and click **Check payment**. Expected values are user-provided and have not been externally verified. The compact result shows **Expected payment**, **Recorded order amount**, the same-currency difference, and a summary. Differences are described as a recorded amount below or above expectation, rather than proof of underpayment or overpayment.
+For an unlinked historical payment, enter your expected amount and currency and click **Check payment**. Linked merchant sales orders use automatic **Merchant reconciliation** instead. Expected values are user-provided and have not been externally verified. The compact result shows **Expected payment**, **Recorded order amount**, the same-currency difference, and a summary. Differences are described as a recorded amount below or above expectation, rather than proof of underpayment or overpayment.
 
 The recorded amount and currency come from the locally saved order-creation details. They are **not an independently verified Capture amount**, net receipt, or bank settlement. The status is also a saved local value, not a fresh PayPal query. The check does not verify receipt of funds or change a payment.
 
@@ -191,7 +193,7 @@ This addition is a **Sandbox-only, CAD-only** sales-to-payment workflow. It is n
 
 ### Verification boundary
 
-The development run used temporary databases, synthetic API responses, and mocked signature decisions. Two regression tests first reproduced false MATCH outcomes from complementary invalid money fields and a final Capture below the provider order total, then passed after the fixes. Tests cover immutable terms, database one-to-one constraints, concurrent attempt reservation, timeout/restart recovery, Capture/query/Webhook normalization, early notifications, deduplication, atomic rollback, refund/reversal races, malformed money, missing/partial/multiple captures, conflicting evidence, old-schema migration, capacity rejection, and a simulated merchant-to-Capture page journey. These are **offline results, not a new real Sandbox verification**. Browser wide/narrow layouts, real provider payloads, real signature delivery and end-to-end operation must still be accepted manually before calling this upgrade validated.
+The development run used temporary databases, synthetic API responses, and mocked signature decisions. Two regression tests first reproduced false MATCH outcomes from complementary invalid money fields and a final Capture below the provider order total, then passed after the fixes. Tests cover immutable terms, database one-to-one constraints, concurrent attempt reservation, timeout/restart recovery, Capture/query/Webhook normalization, early notifications, deduplication, atomic rollback, refund/reversal races, malformed money, missing/partial/multiple captures, conflicting evidence, old-schema migration, capacity rejection, and a simulated merchant-to-Capture page journey. These regression results are **offline coverage**, distinct from the user-reported manual Sandbox acceptance: the Handmade mug merchant expectation of 10 CAD matched its independently returned Capture amount and currency, and the saved result persisted after a page refresh. That check does not establish bank settlement or validate every provider payload and failure path. Abnormal scenarios remain primarily covered by offline tests; Webhook Simulator delivery is unconfirmed, and full wide- and narrow-screen acceptance is still pending.
 
 Official payload references: [Orders capture](https://developer.paypal.com/api/orders/v2/orders-capture) and [Orders details](https://developer.paypal.com/api/orders/v2/orders-get).
 
@@ -243,7 +245,7 @@ The main area shows three step cards: **Order created**, **Buyer approved**, and
 - **Linked approval notification / Linked completion notification:** a corresponding notification is stored with an explicit reference to the selected order. The current order status or Capture ID alone does not produce either label.
 - **No linked record:** no attributable notification is stored for that step. This does not establish that the step never happened.
 
-Expand `Record details` to see the current local payment status, available Capture ID, and last local record update time. Order creation, buyer approval, and payment completion occurrence times display `Not recorded`, because provider timestamps are not persisted. An unavailable Capture ID or local timestamp is also marked explicitly. Definitions of timestamps, signature verification, and `LEGACY` records are kept in these collapsed details so the main summary stays brief.
+Expand `Record details` to see the current local payment status, available Capture ID, and last local record update time. Order creation, buyer approval, and payment completion occurrence times in the three-step view remain `Not recorded` where no confirmed step time is available. Capture evidence separately retains provider creation time when supplied, visible under **Reconciliation evidence**; this is not a payment-completion or bank-settlement timestamp and is not substituted for missing step times. An unavailable Capture ID or local timestamp is also marked explicitly. Definitions of timestamps, signature verification, and `LEGACY` records are kept in these collapsed details so the main summary stays brief.
 
 Expand `Notification records` for the linked notifications. Rows are ordered by **Stored at (UTC)**, the local event insertion time, not by payment occurrence time. For new deliveries, this timestamp is recorded after signature verification; it is not the exact HTTP arrival time. **Local processed at (UTC)** is when the application decided whether to update the local order. Neither timestamp replaces a provider occurrence time or the order's separate last-update timestamp.
 
@@ -299,3 +301,7 @@ Tests use temporary SQLite databases, synthetic credentials, and mocked response
 | `risk.py` | Rule scoring and early learning examples |
 | `ai_explanation.py` | Optional AI explanations |
 | `tests/` | Offline regression tests |
+
+## License
+
+This project is licensed under the [MIT License](LICENSE). Copyright (c) 2026 Sihan Cheng.
