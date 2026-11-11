@@ -298,11 +298,16 @@ class FirstUseTests(unittest.TestCase):
         self.save(B)
         app = self.app()
         self.open(app)
-        with patch.object(order_store, "get_orders", return_value=[order_store.get_order(B)]):
-            app.run()
+        for index in range(20):
+            self.save(f"RECENT-{index:02}")
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("UPDATE orders SET updated_at='2030-01-01' WHERE order_id<>?", (A,))
+            connection.execute("UPDATE orders SET updated_at='2000-01-01' WHERE order_id=?", (A,))
+        app.run()
         self.assertEqual(app.selectbox(key="review_order_id").value, A)
         self.assertEqual(app.session_state["opened_payment_id"], A)
         self.assertFalse(any("no longer available" in item.value for item in app.warning))
+        self.assertTrue(any("Outside recent 20" in item.value for item in app.info))
         self.assert_no_requests()
 
     def test_removing_all_orders_does_not_auto_select_a_later_record(self):

@@ -4,6 +4,7 @@
 from decimal import Decimal, InvalidOperation
 from html import escape
 import math
+import sqlite3
 
 import streamlit as st
 from ai_explanation import (
@@ -13,6 +14,7 @@ from ai_explanation import (
     REVIEW_LIMITATIONS,
     explain_order_risk,
 )
+from payment_evidence import REVIEW_REASON_LABELS
 from risk import calculate_score, risk_level, transaction_ratio
 from paypal_auth import (
     PayPalAuthError,
@@ -27,7 +29,6 @@ from order_store import (
     create_merchant_sale,
     get_merchant_sales,
     begin_sale_creation,
-    get_sale_reconciliation,
     record_payment_observation,
     begin_capture,
     begin_order_creation,
@@ -35,7 +36,7 @@ from order_store import (
     get_order,
     get_order_events,
     get_order_creation_attempt,
-    get_orders,
+    get_review_view_snapshot,
     mark_capture_ready,
     mark_capture_unknown,
     release_capture,
@@ -485,84 +486,122 @@ def remember_payment_selection():
     st.session_state.pop("payment_selection_missing", None)
 
 
+def payment_description(evidence):
+    sale = evidence["sale"]
+    if not sale:
+        return "No linked merchant order"
+    return sale.get("description") or "Description not recorded"
+
+
+def payment_amount(order):
+    """Display the saved decimal string without a float round-trip."""
+    try:
+        amount = Decimal(order["amount"])
+        return format(amount, ".2f") if amount.is_finite() else "Not recorded"
+    except (InvalidOperation, TypeError):
+        return "Not recorded"
+
+
+def review_reason_text(evidence):
+    return " · ".join(REVIEW_REASON_LABELS[reason] for reason in evidence["result"]["reasons"]) or "Matches saved Capture record"
+
+
+def table_text(value):
+    text = escape(str(value)).replace("\\", "\\\\").replace("\n", " ").replace("\r", " ")
+    for character in ("|", "[", "]", "`", "*", "_"):
+        text = text.replace(character, "\\" + character)
+    return text
+
+
 def render_payment_browser():
     st.subheader("Recent payments")
-    st.caption("Up to 20 saved payments, sorted by local record update time.")
-    orders = get_orders()
-    orders_by_id = {order["order_id"]: order for order in orders}
+    mode = st.radio("Show payments", ["All in this view", "Needs review"], horizontal=True, key="review_filter")
+    st.caption("Scope: most recent 20 saved payments, sorted by local update time. Older records are not included.")
+    try:
+        view = get_review_view_snapshot((st.session_state.get("selected_payment_id"), st.session_state.get("opened_payment_id")))
+    except sqlite3.Error:
+        st.error("Payment view unavailable. The local database could not be read or its schema is not ready. No review count is available; nothing was created or migrated.")
+        return None
+    payments, by_id = view["payments"], view["by_id"]
+    visible = [item for item in payments if mode == "All in this view" or item["result"]["needs_review"]]
+    needs_review_count = sum(item["result"]["needs_review"] for item in payments)
+    st.caption(f"Needs review: {needs_review_count} of {len(payments)} in this view. Historical data gaps are not confirmed payment discrepancies.")
     if "selected_payment_id" not in st.session_state:
-        st.session_state["selected_payment_id"] = next(iter(orders_by_id), None)
+        st.session_state["selected_payment_id"] = visible[0]["order"]["order_id"] if visible else None
     selected_id = st.session_state["selected_payment_id"]
-    if selected_id and selected_id not in orders_by_id:
-        retained_order = get_order(selected_id)
-        if retained_order:
-            # The recent list is limited; leaving it does not imply deletion.
-            orders_by_id[selected_id] = retained_order
-        else:
-            st.session_state["selected_payment_id"] = None
-            st.session_state["payment_selection_missing"] = True
-            st.session_state.pop("payment_check_result", None)
+    if selected_id and selected_id not in by_id:
+        st.session_state["selected_payment_id"] = None
+        st.session_state["payment_selection_missing"] = True
+        st.session_state.pop("payment_check_result", None)
     if st.session_state.get("payment_selection_missing"):
         st.warning("The selected payment is no longer available. Select a payment again and click Review payment.")
-    if not orders:
+    if not payments:
         clear_review()
         st.session_state.pop("opened_payment_id", None)
         st.session_state.pop("payment_check_result", None)
         st.info("No saved payments yet. Open the Sandbox tools section, enter a test amount, and click Create Sandbox Order. Approve and Capture it there, then return to Review payments.")
         return None
-    rows = ["| Payment | Amount | Currency | Payment status |", "| --- | --- | --- | --- |"]
-    for order in orders:
-        cells = (short_payment_reference(order["order_id"]), f"{float(order['amount']):.2f}", order["currency"], order["status"])
-        rows.append("| " + " | ".join(str(value).replace("|", "\\|").replace("\n", " ") for value in cells) + " |")
-    st.markdown("\n".join(rows))
-    positions = {order_id: index + 1 for index, order_id in enumerate(orders_by_id)}
-    # Restore by ID before registration, even when labels or order have changed.
-    st.session_state["review_order_id"] = st.session_state["selected_payment_id"]
-    selected_order_id = st.selectbox(
-        "Select a payment",
-        options=list(orders_by_id),
-        format_func=lambda order_id: (
-            f"{positions[order_id]}. {float(orders_by_id[order_id]['amount']):.2f} "
-            f"{orders_by_id[order_id]['currency']} | {orders_by_id[order_id]['status']} "
-            f"| {short_payment_reference(order_id)}"
-        ),
-        key="review_order_id",
-        index=None,
-        placeholder="Choose a payment",
-        on_change=remember_payment_selection,
-    )
+    if visible:
+        rows = ["| Payment | Description | Recorded order amount | Currency | Payment status | Review reason |", "| --- | --- | --- | --- | --- | --- |"]
+        for item in visible:
+            order = item["order"]
+            cells = (short_payment_reference(order["order_id"]), payment_description(item), payment_amount(order), order["currency"], order["status"], review_reason_text(item))
+            rows.append("| " + " | ".join(table_text(value) for value in cells) + " |")
+        st.markdown("\n".join(rows))
+    else:
+        st.info("No payments need review within the most recent 20 records. Older records were not checked.")
+    options = [item["order"]["order_id"] for item in visible]
+    selected_id = st.session_state["selected_payment_id"]
+    recent_ids = {item["order"]["order_id"] for item in payments}
+    retained_label = None
+    if selected_id and selected_id not in options:
+        options.append(selected_id)
+        retained_label = "Outside current filter" if selected_id in recent_ids else "Outside recent 20"
+        st.info(f"Current selection {short_payment_reference(selected_id)}: {retained_label}. It is retained separately and is not counted among filtered results.")
+    positions = {order_id: index + 1 for index, order_id in enumerate(options)}
+    def label(order_id):
+        item = by_id[order_id]
+        order = item["order"]
+        suffix = f" | {retained_label}" if retained_label and order_id == selected_id else ""
+        return (f"{positions[order_id]}. {payment_description(item)} · {payment_amount(order)} {order['currency']} "
+                f"| {order['status']} | {short_payment_reference(order_id)}{suffix}")
+    st.session_state["review_order_id"] = selected_id
+    selected_order_id = st.selectbox("Select a payment", options, format_func=label, key="review_order_id",
+                                     index=None, placeholder="Choose a payment", on_change=remember_payment_selection)
     if st.button("Review payment", key="open_payment_review", type="primary", disabled=selected_order_id is None):
         st.session_state["opened_payment_id"] = selected_order_id
     opened_id = st.session_state.get("opened_payment_id")
     if not opened_id:
         st.info("Choose a payment and click Review payment to see its status and supporting records. No simulated baseline is required.")
         return None
-    order = get_order(opened_id)
-    if not order:
+    evidence = by_id.get(opened_id)
+    if not evidence:
         clear_review()
         st.session_state.pop("opened_payment_id", None)
         st.session_state.pop("payment_check_result", None)
         st.warning("The previously opened payment is no longer available. Select a payment and click Review payment.")
         return None
+    if opened_id != selected_order_id and opened_id not in {item["order"]["order_id"] for item in visible}:
+        scope = "Outside current filter" if opened_id in recent_ids else "Outside recent 20"
+        st.info(f"Opened payment {short_payment_reference(opened_id)}: {scope}. Its retained details are not counted among filtered results.")
     if selected_order_id is None:
         st.info(f"Select a payment and click Review payment. The overview below still shows {short_payment_reference(opened_id)}.")
     elif opened_id != selected_order_id:
-        st.info(
-            f"Selection changed. Click Review payment to open {short_payment_reference(selected_order_id)}. "
-            f"The overview below still shows {short_payment_reference(opened_id)}."
-        )
-    return order
+        st.info(f"Selection changed. Click Review payment to open {short_payment_reference(selected_order_id)}. "
+                f"The overview below still shows {short_payment_reference(opened_id)}.")
+    return evidence
 
 
-def render_payment_overview(order):
+def render_payment_overview(order, description):
     st.subheader("Payment overview")
     status = order["status"]
     tone = "pg-paid" if status == "COMPLETED" else ("pg-terminal" if status in {"DENIED", "REFUNDED", "REVERSED"} else "pg-pending")
     st.markdown(
         '<section class="pg-payment-overview pg-summary" aria-label="Opened payment overview">'
         f'<p class="pg-order-id">Reviewing payment: {escape(short_payment_reference(order["order_id"]))}</p>'
-        '<div class="pg-summary-grid"><div><p class="pg-label">Payment amount</p>'
-        f'<p class="pg-amount">{float(order["amount"]):.2f} <span class="pg-currency">{escape(order["currency"])}</span></p></div>'
+        f'<p class="pg-note">Merchant description: {escape(description)}</p>'
+        '<div class="pg-summary-grid"><div><p class="pg-label">Recorded order amount</p>'
+        f'<p class="pg-amount">{payment_amount(order)} <span class="pg-currency">{escape(order["currency"])}</span></p></div>'
         '<div><p class="pg-label">Payment status</p>'
         f'<span class="pg-badge {tone}">{escape(status)}</span></div>'
         '<div><p class="pg-label">Source</p><p class="pg-review">Saved local record</p>'
@@ -1027,7 +1066,7 @@ def render_payment():
     else:
         st.info("No active payment order. Create a Sandbox order here to begin.")
 
-def render_payment_records(selected_order):
+def render_payment_records(selected_order, description):
     with st.container(key="payment_evidence"):
         st.subheader("Payment records")
         if selected_order:
@@ -1059,6 +1098,7 @@ def render_payment_records(selected_order):
             )
 
             with st.expander("Record details", expanded=False):
+                st.text(f"Merchant description: {description}")
                 st.write(f"Payment ID: {selected_order['order_id']}")
                 st.write(f"Current local payment status: {selected_order['status']}")
                 st.write(f"Capture ID: {selected_order.get('capture_id') or 'Not recorded'}")
@@ -1115,15 +1155,17 @@ def render_payment_records(selected_order):
             st.info("Select a payment and click Review payment to view its records.")
 
 
-def render_merchant_reconciliation(order):
-    evidence = get_sale_reconciliation(order["order_id"])
+def render_merchant_reconciliation(evidence):
     order = evidence["order"]
     sale = evidence["sale"]
     if not sale:
         with st.expander("Merchant reconciliation", expanded=False):
+            st.caption(f"Review reason: {review_reason_text(evidence)}")
             st.caption("Historical data insufficient — no merchant order link. Manual expectation checking below compares only the recorded order amount.")
         return False
     st.subheader("Merchant reconciliation")
+    st.text(f"Merchant description: {payment_description(evidence)}")
+    st.caption(f"Review reason: {review_reason_text(evidence)}")
     st.caption("Sandbox only. Compares immutable merchant terms with saved provider Capture evidence, not bank settlement or net proceeds.")
     st.caption("All reconciliation values use one local snapshot, not guaranteed to be the latest after reading. No automatic refresh or retry.")
     left, right = st.columns(2)
@@ -1237,7 +1279,7 @@ def render_merchant_orders():
 
 # Preserve owned inputs while their section is not rendered by native navigation.
 for input_key in list(st.session_state):
-    if input_key in {"review_order_id", "merchant_sale_id", "sandbox_order_amount"} or (
+    if input_key in {"review_order_id", "review_filter", "merchant_sale_id", "sandbox_order_amount"} or (
         input_key.startswith(("simulated_average_", "expected_amount_", "expected_currency_", "sensitivity_baseline_", "what_if_amount_"))
         and "_preset_" not in input_key
     ):
@@ -1249,13 +1291,15 @@ if "main_navigation" not in st.session_state:
 active_section = st.radio("Workspace", sections, horizontal=True, key="main_navigation")
 if active_section == "Review payments":
     with st.container(key="workbench"):
-        selected_order = render_payment_browser()
-        if selected_order:
-            render_payment_overview(selected_order)
-            if not render_merchant_reconciliation(selected_order):
+        selected_evidence = render_payment_browser()
+        if selected_evidence:
+            selected_order = selected_evidence["order"]
+            description = payment_description(selected_evidence)
+            render_payment_overview(selected_order, description)
+            if not render_merchant_reconciliation(selected_evidence):
                 render_payment_check(selected_order)
             render_ai_rule_explanation(selected_order)
-            render_payment_records(selected_order)
+            render_payment_records(selected_order, description)
             render_assumption_tools(selected_order)
 elif active_section == "Sandbox tools":
     st.caption("Development tools for Sandbox test payments. This is separate from viewing payment records.")

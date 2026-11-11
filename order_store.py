@@ -584,6 +584,19 @@ def record_payment_observation(order_id, observation) -> None:
             _replay_pending_capture_events(connection, reference)
 
 
+def _read_sale_reconciliation(connection, order_id):
+    """Materialize shared evidence and rule results within the caller's snapshot."""
+    sale_row = connection.execute("SELECT * FROM merchant_sales_orders WHERE paypal_order_id=?", (order_id,)).fetchone()
+    order_row = connection.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+    captures = [dict(row) for row in connection.execute("SELECT * FROM capture_evidence WHERE order_id=? ORDER BY capture_id", (order_id,))]
+    issues = [row[0] for row in connection.execute("SELECT issue FROM capture_evidence_issues WHERE order_id=?", (order_id,))]
+    observations = [dict(row) for row in connection.execute(
+        "SELECT * FROM capture_observations WHERE order_id=? ORDER BY recorded_at, rowid", (order_id,))]
+    sale, order = dict(sale_row) if sale_row else None, dict(order_row) if order_row else None
+    result = reconcile_sale(sale, order, captures, issues)
+    return {"sale": sale, "order": order, "captures": captures, "issues": issues, "observations": observations, "result": result}
+
+
 def get_sale_reconciliation(order_id):
     """Read every reconciliation input from one explicit, finite snapshot."""
     initialize_database()
@@ -592,17 +605,38 @@ def get_sale_reconciliation(order_id):
         with connection:
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
-            sale_row = connection.execute("SELECT * FROM merchant_sales_orders WHERE paypal_order_id=?", (order_id,)).fetchone()
-            order_row = connection.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
-            captures = [dict(row) for row in connection.execute("SELECT * FROM capture_evidence WHERE order_id=? ORDER BY capture_id", (order_id,))]
-            issues = [row[0] for row in connection.execute("SELECT issue FROM capture_evidence_issues WHERE order_id=?", (order_id,))]
-            observations = [dict(row) for row in connection.execute(
-                "SELECT * FROM capture_observations WHERE order_id=? ORDER BY recorded_at, rowid", (order_id,))]
+            return _read_sale_reconciliation(connection, order_id)
     finally:
         connection.close()
-    sale, order = dict(sale_row) if sale_row else None, dict(order_row) if order_row else None
-    result = reconcile_sale(sale, order, captures, issues)
-    return {"sale": sale, "order": order, "captures": captures, "issues": issues, "observations": observations, "result": result}
+
+
+def _connect_review_view():
+    connection = sqlite3.connect(DATABASE_PATH.resolve().as_uri() + "?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def get_review_view_snapshot(retained_ids=()):
+    """Read recent 20 and retained references without creating/migrating the database."""
+    if not DATABASE_PATH.is_file():
+        return {"payments": [], "by_id": {}}
+    connection = _connect_review_view()
+    try:
+        with connection:
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("BEGIN")
+            recent_ids = [row["order_id"] for row in connection.execute(
+                "SELECT order_id FROM orders ORDER BY updated_at DESC, order_id LIMIT 20")]
+            by_id = {order_id: _read_sale_reconciliation(connection, order_id) for order_id in recent_ids}
+            for order_id in retained_ids:
+                if (isinstance(order_id, str) and order_id not in by_id
+                        and connection.execute("SELECT 1 FROM orders WHERE order_id=?", (order_id,)).fetchone()):
+                    evidence = _read_sale_reconciliation(connection, order_id)
+                    if evidence["order"]:
+                        by_id[order_id] = evidence
+            return {"payments": [by_id[order_id] for order_id in recent_ids], "by_id": by_id}
+    finally:
+        connection.close()
 
 
 def record_webhook_event(event: Dict[str, Any]) -> bool:

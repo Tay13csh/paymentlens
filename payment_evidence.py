@@ -110,30 +110,56 @@ class PaymentObservation(tuple):
         return obj
 
 
+REVIEW_REASON_LABELS = {
+    "HISTORY": "Historical data insufficient",
+    "AMOUNT_DIFFERENCE": "Amount difference",
+    "CURRENCY_MISMATCH": "Currency mismatch",
+    "CAPTURE_EVIDENCE_INCOMPLETE": "Capture evidence incomplete",
+    "EVIDENCE_CONFLICT": "Evidence conflict",
+    "UNSUPPORTED_STRUCTURE": "Unsupported payment structure",
+    "PAYMENT_NOT_COMPLETED": "Payment completion unconfirmed",
+    "REFUNDED": "Refunded — local record",
+    "REVERSED": "Reversed — local record",
+    "DENIED": "Denied — local record",
+}
+
+
 def reconcile_sale(sale, order, captures, issues):
     """Compare only one completed, explicitly final Capture with merchant terms."""
+    def finish(result, reasons):
+        status = order["status"] if order else None
+        if status in {"REFUNDED", "REVERSED", "DENIED"}:
+            reasons = [*reasons, status]
+        return {**result, "reasons": list(dict.fromkeys(reasons)), "needs_review": result["code"] != "MATCH"}
+
     if not sale:
-        return {"code": "HISTORY", "summary": "Historical data insufficient — no merchant order link"}
+        return finish({"code": "HISTORY", "summary": "Historical data insufficient — no merchant order link"}, ["HISTORY"])
     if issues or any(item["conflict"] for item in captures):
-        return {"code": "REVIEW", "summary": "Evidence conflict or unsupported payment structure — manual review required"}
+        conflict_issues = {"Provider order identity differs", "Capture belongs to conflicting orders"}
+        reasons = []
+        if any(item["conflict"] for item in captures) or any(issue in conflict_issues for issue in issues):
+            reasons.append("EVIDENCE_CONFLICT")
+        if any(issue not in conflict_issues for issue in issues):
+            reasons.append("UNSUPPORTED_STRUCTURE")
+        return finish({"code": "REVIEW", "summary": "Evidence conflict or unsupported payment structure — manual review required"}, reasons)
     if len(captures) > 1:
-        return {"code": "UNSUPPORTED", "summary": "Unsupported payment structure — multiple captures"}
+        return finish({"code": "UNSUPPORTED", "summary": "Unsupported payment structure — multiple captures"}, ["UNSUPPORTED_STRUCTURE"])
     if not captures:
-        return {"code": "INCOMPLETE", "summary": "No independent Capture amount recorded — completion unconfirmed"}
+        return finish({"code": "INCOMPLETE", "summary": "No independent Capture amount recorded — completion unconfirmed"}, ["CAPTURE_EVIDENCE_INCOMPLETE"])
     capture = captures[0]
     if (capture["final_capture"] != 1 or capture["status"] != "COMPLETED"
             or not capture["amount"] or not capture["currency"]
             or not capture.get("amount_pair_valid") or not capture.get("full_capture_verified")):
-        return {"code": "INCOMPLETE", "summary": "Full Capture is unconfirmed — a valid provider order query/response must confirm the purchase unit total and Capture together"}
+        return finish({"code": "INCOMPLETE", "summary": "Full Capture is unconfirmed — a valid provider order query/response must confirm the purchase unit total and Capture together"}, ["CAPTURE_EVIDENCE_INCOMPLETE"])
     if order["status"] in {"REFUNDED", "REVERSED", "DENIED"}:
         prefix = "Historical Capture comparison only. Current local status: " + order["status"] + ". "
         terminal = True
     elif order["status"] != "COMPLETED" or order["capture_state"] != "COMPLETED":
-        return {"code": "INCOMPLETE", "summary": "Current payment completion is unconfirmed"}
+        return finish({"code": "INCOMPLETE", "summary": "Current payment completion is unconfirmed"}, ["PAYMENT_NOT_COMPLETED"])
     else:
         prefix, terminal = "", False
     if capture["currency"] != sale["currency"]:
-        return {"code": "CURRENCY", "summary": prefix + "Capture currency differs from the merchant order; no conversion performed"}
+        return finish({"code": "CURRENCY", "summary": prefix + "Capture currency differs from the merchant order; no conversion performed"}, ["CURRENCY_MISMATCH"])
     difference = Decimal(capture["amount"]) - Decimal(sale["amount"])
     result = {"difference": format(difference, ".2f"), "currency": sale["currency"]}
     if difference:
@@ -141,4 +167,4 @@ def reconcile_sale(sale, order, captures, issues):
         result.update(code="DIFFERENCE", summary=prefix + f"Saved Capture amount is {abs(difference):.2f} {sale['currency']} {direction} merchant expectation")
     else:
         result.update(code="TERMINAL" if terminal else "MATCH", summary=prefix + "Merchant amount and currency match the saved Sandbox Capture record")
-    return result
+    return finish(result, ["AMOUNT_DIFFERENCE"] if difference else [])
