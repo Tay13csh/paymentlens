@@ -1,7 +1,8 @@
-# PayGuard AI - Web Application
+# PaymentLens - Web Application
 # Day 3: First Streamlit Dashboard
 
 from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
 from html import escape
 import math
 import sqlite3
@@ -14,7 +15,12 @@ from ai_explanation import (
     REVIEW_LIMITATIONS,
     explain_order_risk,
 )
+from analysis_view import discussion_label, render_analysis_summary
+from payment_assistant_ui import render_payment_assistant
+from guided_demo import render_guided_demo
+from runtime_config import load_configuration_status
 from payment_evidence import REVIEW_REASON_LABELS
+from reconciliation_report import build_report
 from risk import calculate_score, risk_level, transaction_ratio
 from paypal_auth import (
     PayPalAuthError,
@@ -43,7 +49,7 @@ from order_store import (
     update_order_status,
 )
 
-st.set_page_config(page_title="PayGuard AI | Order workbench", layout="wide")
+st.set_page_config(page_title="PaymentLens | AI-assisted payment reconciliation", layout="wide")
 st.markdown(
     """
     <style>
@@ -76,6 +82,13 @@ st.markdown(
     .stApp h2 { font-size: 1.35rem; margin-top: 0.6rem; }
     .stApp h3 { font-size: 1.1rem; }
     .stApp [data-testid="stCaptionContainer"] { color: #526277; }
+    /* Normal search focus only; retain native/ARIA validation-error styling. */
+    .st-key-workbench [data-testid="stTextInputRootElement"]:has(input[aria-label="Search merchant description or order ID"]):focus-within:not([aria-invalid="true"]):not(:has([aria-invalid="true"], input:invalid)) {
+        border-color: #0f766e;
+        outline: 2px solid #0f766e;
+        outline-offset: 2px;
+        box-shadow: 0 0 0 4px #d8f1e9;
+    }
     .stButton > button {
         background: #ffffff;
         color: #0f766e;
@@ -106,6 +119,21 @@ st.markdown(
         background: #e5ebf1;
         color: #526277;
         border-color: #d7e2ee;
+    }
+    .st-key-workbench [data-testid="stDownloadButton"] button {
+        background: #ffffff; color: #0f766e; border: 1px solid #0f766e;
+        border-radius: 10px; font-weight: 600;
+    }
+    .st-key-workbench [data-testid="stDownloadButton"] button [data-testid="stMarkdownContainer"],
+    .st-key-workbench [data-testid="stDownloadButton"] button p { color: inherit; }
+    .st-key-workbench [data-testid="stDownloadButton"] button:hover:not(:disabled) {
+        background: #eaf4f2; color: #115e59; border-color: #115e59;
+    }
+    .st-key-workbench [data-testid="stDownloadButton"] button:focus-visible {
+        outline: 3px solid #13263d; outline-offset: 3px;
+    }
+    .st-key-workbench [data-testid="stDownloadButton"] button:disabled {
+        background: #e5ebf1; color: #526277; border-color: #d7e2ee;
     }
     .stApp [data-testid="stLinkButton"] a {
         background: #0f766e;
@@ -323,11 +351,61 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.title("PayGuard AI")
-st.write("Review a payment and its supporting records.")
-st.caption("Sandbox test environment. Start by selecting a payment, then click Review payment.")
+st.title("PaymentLens")
+st.write("AI-assisted payment reconciliation")
+st.subheader("Payment analysis")
 
-returned_order_id = st.query_params.get("token")
+diagnostics, capabilities, configuration_problem = load_configuration_status()
+MODES = ("PayPal Sandbox", "Guided demo")
+SOURCE_LABELS = {"PayPal Sandbox": "My Sandbox payments", "Guided demo": "Example cases"}
+if "application_mode" not in st.session_state:
+    url_mode = st.query_params.get("mode")
+    restore_sandbox = bool(st.query_params.get("token") or st.query_params.get("create_attempt")
+                           or st.session_state.get("main_navigation") or st.session_state.get("paypal_order_id"))
+    st.session_state["application_mode"] = (
+        "Guided demo" if url_mode == "demo" else "PayPal Sandbox" if url_mode == "sandbox" or restore_sandbox
+        or capabilities["paypal"] or capabilities["ai"] else "Guided demo")
+
+def change_application_mode():
+    for state_key in ("payment_assistant_state", "demo_payment_assistant_state"):
+        state = st.session_state.get(state_key)
+        if state:
+            for order_id, session in list(state.sessions.items()):
+                if session["pending"]:
+                    state.cancel_wait(order_id, session["pending"])
+    st.query_params["mode"] = "demo" if st.session_state["application_mode"] == "Guided demo" else "sandbox"
+
+with st.container(key="experience_navigation"):
+    st.markdown("""<style>
+    .st-key-experience_navigation [role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+    .st-key-experience_navigation [role="radiogroup"] label {
+        background: #ffffff; color: #13263d; border: 1px solid #0f766e;
+        border-radius: 10px; padding: 0.6rem 0.8rem; max-width: 100%; white-space: normal;
+    }
+    .st-key-experience_navigation [role="radiogroup"] label:has(input:checked) { background: #d8f1e9; border-width: 2px; }
+    .st-key-experience_navigation [role="radiogroup"] label:focus-within { outline: 3px solid #13263d; outline-offset: 2px; }
+    </style>""", unsafe_allow_html=True)
+    application_mode = st.radio("Payment source", MODES, horizontal=True, format_func=lambda mode: SOURCE_LABELS[mode], key="application_mode", on_change=change_application_mode)
+if st.query_params.get("mode") not in ("demo", "sandbox"):
+    st.query_params["mode"] = "demo" if application_mode == "Guided demo" else "sandbox"
+with st.sidebar.expander("Configuration diagnostics", expanded=False):
+    st.caption("Local presence/format only. No credentials or model access have been verified online; no values are displayed.")
+    if configuration_problem:
+        st.info(configuration_problem)
+    for field, status in diagnostics.items():
+        st.text(field + ": " + status)
+    st.caption("Guided demo and sample explanations require no credentials. OpenAI model availability is not assumed.")
+if application_mode == "PayPal Sandbox":
+    if not capabilities["paypal"]:
+        st.info("PayPal Sandbox operations unavailable: supply client ID and secret locally. Saved records and local calculations remain available; Guided demo needs no configuration.")
+    if not capabilities["webhook"]:
+        st.warning("Verified Webhooks unavailable: PayPal credentials and a Webhook ID are required. Basic Sandbox OAuth/create/Capture/query do not require that ID, but notification evidence and automatic refund/reversal updates may be missing.")
+    if not capabilities["ai"]:
+        st.info("Live AI unavailable: configure OpenAI locally. Payment viewing and reconciliation still work.")
+elif st.query_params.get("token") or st.query_params.get("create_attempt"):
+    st.info("Sandbox return/recovery parameters are retained. Switch to PayPal Sandbox to use them; Guided demo does not consume them.")
+
+returned_order_id = st.query_params.get("token") if application_mode == "PayPal Sandbox" else None
 if returned_order_id and returned_order_id != st.session_state.get("paypal_order_id"):
     st.session_state["paypal_order_id"] = returned_order_id
     st.session_state.pop("paypal_approval_url", None)
@@ -337,7 +415,7 @@ if returned_order_id and returned_order_id != st.session_state.get("paypal_order
 def render_authentication():
     with st.expander("Authentication", expanded=False):
         st.subheader("PayPal Sandbox Authentication")
-        if st.button("Get Sandbox Access Token"):
+        if st.button("Get Sandbox Access Token", disabled=not capabilities["paypal"]):
             try:
                 paypal_config = st.secrets["paypal"]
                 client_id = paypal_config["client_id"]
@@ -560,6 +638,7 @@ def render_payment_browser():
         st.error("Payment view unavailable. The local database could not be read or its schema is not ready. No review count is available; nothing was created or migrated.")
         return None
     payments, by_id = view["payments"], view["by_id"]
+    view_generated_at = datetime.now(timezone.utc)
     counts = {category: sum(payment_category(item) == category for item in payments)
               for category in FILTER_CATEGORIES[1:]}
     counts["All"] = len(payments)
@@ -583,6 +662,14 @@ def render_payment_browser():
             if not reasons or set(reasons).intersection(item["result"]["reasons"]):
                 visible.append(item)
     st.caption(f"Showing {len(visible)} of {len(payments)} in this view. Historical data gaps are not confirmed payment discrepancies.")
+    report = build_report(visible, view_generated_at, category=mode, search_active=bool(query), reason_filters=reasons)
+    st.markdown("**Reconciliation report (current view)**")
+    st.caption(f"Generated at {report.generated_at_utc} UTC · {report.record_count} records. "
+               "This view snapshot only, not complete history or bank settlement. Contains merchant descriptions; not anonymous.")
+    if not visible:
+        st.info("No records to export in the current view. Change or clear the filters.")
+    st.download_button("Download CSV", data=report.data, file_name="paymentlens-reconciliation-current-view.csv",
+                       mime="text/csv", key="reconciliation_csv", disabled=not visible, on_click="ignore")
     if "selected_payment_id" not in st.session_state:
         st.session_state["selected_payment_id"] = visible[0]["order"]["order_id"] if visible else None
     selected_id = st.session_state["selected_payment_id"]
@@ -861,7 +948,7 @@ def render_ai_rule_explanation(order):
             st.info("Calculate the rule result above before generating an AI explanation. AI is never requested automatically.")
             return
         st.markdown("**3. Generate an AI explanation manually**")
-        if st.button("Generate AI Explanation", key="generate_ai_explanation", type="primary"):
+        if st.button("Generate AI Explanation", key="generate_ai_explanation", type="primary", disabled=not capabilities["ai"]):
             st.session_state.pop("ai_explanation", None)
             try:
                 openai_config = st.secrets["openai"]
@@ -988,10 +1075,10 @@ def render_payment():
     if creation_error:
         st.error(creation_error)
 
-    new_creation = st.button("Create New Sandbox Order" if creation_attempt_id else "Create Sandbox Order")
+    new_creation = st.button("Create New Sandbox Order" if creation_attempt_id else "Create Sandbox Order", disabled=not capabilities["paypal"])
     retry_creation = False
     if creation_attempt and not creation_attempt["order_id"]:
-        retry_creation = st.button("Retry Same Order Creation")
+        retry_creation = st.button("Retry Same Order Creation", disabled=not capabilities["paypal"])
         st.caption("Retry uses the saved amount, even if the amount input above has changed.")
 
     if new_creation or retry_creation:
@@ -1038,7 +1125,7 @@ def render_payment():
             if creation_attempt and creation_attempt["order_id"] == paypal_order_id:
                 st.caption("Sandbox order created. Approve it with a Sandbox buyer account.")
         if "paypal_approval_url" in st.session_state and not payment_completed:
-            st.link_button("Approve Order in PayPal", st.session_state["paypal_approval_url"])
+            st.link_button("Approve Order in PayPal", st.session_state["paypal_approval_url"], disabled=not capabilities["paypal"])
         if returned_order_id == paypal_order_id:
             with st.expander("Payment details", expanded=False):
                 st.write("PayPal returned to this app with this order reference.")
@@ -1052,7 +1139,7 @@ def render_payment():
                 st.write(f"Capture ID: {saved_capture_order['capture_id']}")
         elif saved_capture_order["capture_state"] in {"UNKNOWN", "IN_PROGRESS"}:
             st.warning("Capture result is unconfirmed. Check PayPal order status before trying again.")
-            if st.button("Check PayPal Order Status", key="check_paypal_order_status"):
+            if st.button("Check PayPal Order Status", key="check_paypal_order_status", disabled=not capabilities["paypal"]):
                 try:
                     paypal_config = st.secrets["paypal"]
                     observation = get_order_status(
@@ -1080,7 +1167,7 @@ def render_payment():
                             "no new Capture request was sent."
                         )
         else:
-            if st.button("Capture Approved Order"):
+            if st.button("Capture Approved Order", disabled=not capabilities["paypal"]):
                 if not begin_capture(paypal_order_id):
                     st.warning("The order state changed. Refresh the page and check the saved order status.")
                 else:
@@ -1217,28 +1304,17 @@ def render_payment_records(selected_order, description):
 def render_merchant_reconciliation(evidence):
     order = evidence["order"]
     sale = evidence["sale"]
-    if not sale:
-        with st.expander("Merchant reconciliation", expanded=False):
-            st.caption(f"Review reason: {review_reason_text(evidence)}")
-            st.caption("Historical data insufficient — no merchant order link. Manual expectation checking below compares only the recorded order amount.")
-        return False
     st.subheader("Merchant reconciliation")
+    render_analysis_summary(evidence)
+    if not sale:
+        with st.expander("Merchant reconciliation details", expanded=False):
+            st.caption(f"Review reason: {review_reason_text(evidence)}")
+            st.caption("Historical data insufficient — no merchant order link. The optional manual expectation check compares only the recorded order amount and is not merchant/Capture reconciliation.")
+        return False
     st.text(f"Merchant description: {payment_description(evidence)}")
     st.caption(f"Review reason: {review_reason_text(evidence)}")
-    st.caption("Sandbox only. Compares immutable merchant terms with saved provider Capture evidence, not bank settlement or net proceeds.")
     st.caption("All reconciliation values use one local snapshot, not guaranteed to be the latest after reading. No automatic refresh or retry.")
-    left, right = st.columns(2)
-    left.metric("Merchant expected amount", f"{sale['amount']} {sale['currency']}")
     captures = evidence["captures"]
-    if len(captures) == 1 and captures[0]["amount"] and captures[0]["currency"]:
-        right.metric("Saved Sandbox Capture amount", f"{captures[0]['amount']} {captures[0]['currency']}")
-    else:
-        right.write("Capture amount: not confirmed as a single supported Capture")
-    result = evidence["result"]
-    if result["code"] == "MATCH":
-        st.success(result["summary"])
-    else:
-        st.warning(result["summary"])
     with st.expander("Reconciliation evidence", expanded=False):
         st.write(f"Test sales order: {sale['sale_id']}")
         st.write(f"Local status in this snapshot: {order['status']}")
@@ -1261,17 +1337,19 @@ def render_merchant_reconciliation(evidence):
         for issue in evidence["issues"]:
             st.warning(issue)
         st.caption("Merchant terms are locally supplied test records, not externally verified invoices. Multiple or partial captures are not reconciled automatically. Refunds do not erase the historical Capture amount.")
+    return True
+
+
+def render_provider_refresh(order_id):
     # A read-only provider GET is explicit and never issues a Capture request.
-    if st.button("Refresh Capture evidence from PayPal", key="refresh_merchant_evidence"):
+    if st.button("Refresh Capture evidence from PayPal", key="refresh_merchant_evidence", disabled=not capabilities["paypal"]):
         try:
             settings = st.secrets["paypal"]
-            observation = get_order_status(settings["client_id"], settings["client_secret"], order["order_id"])
-            record_payment_observation(order["order_id"], observation)
+            observation = get_order_status(settings["client_id"], settings["client_secret"], order_id)
+            record_payment_observation(order_id, observation)
             st.rerun()
         except Exception:
             st.error("Could not refresh and save provider evidence. Existing records were retained; no payment was initiated.")
-    return True
-
 
 def open_linked_payment(sale_id):
     """Select an existing linked payment and its saved retry identity, without creating anything."""
@@ -1313,7 +1391,7 @@ def render_merchant_orders():
         st.error(st.session_state["merchant_navigation_error"])
     st.write(f"Merchant order: {sale['sale_id']} | Expected: {sale['amount']} CAD")
     st.caption("Terms immutable from saving. Payment binding locked before the first provider request.")
-    if st.button("Create or resume linked PayPal order", key="create_merchant_payment", type="primary"):
+    if st.button("Create or resume linked PayPal order", key="create_merchant_payment", type="primary", disabled=not capabilities["paypal"]):
         try:
             attempt_id = begin_sale_creation(selected)
             attempt = get_order_creation_attempt(attempt_id)
@@ -1338,37 +1416,73 @@ def render_merchant_orders():
 
 # Preserve owned inputs while their section is not rendered by native navigation.
 for input_key in list(st.session_state):
-    if input_key in {"review_order_id", "review_filter", "payment_search", "payment_reason_filters", "merchant_sale_id", "sandbox_order_amount"} or (
-        input_key.startswith(("simulated_average_", "expected_amount_", "expected_currency_", "sensitivity_baseline_", "what_if_amount_"))
+    if input_key in {"main_navigation", "guided_demo_case", "review_order_id", "review_filter", "payment_search", "payment_reason_filters", "merchant_sale_id", "sandbox_order_amount"} or (
+        input_key.startswith(("demo_assistant_draft_", "assistant_draft_", "simulated_average_", "expected_amount_", "expected_currency_", "sensitivity_baseline_", "what_if_amount_"))
         and "_preset_" not in input_key
     ):
         st.session_state[input_key] = st.session_state[input_key]
-sections = ["Review payments", "Sandbox tools", "Test sales orders"]
-initial_section = "Sandbox tools" if st.query_params.get("create_attempt") or st.query_params.get("token") else "Review payments"
-if "main_navigation" not in st.session_state:
-    st.session_state["main_navigation"] = initial_section
-active_section = st.radio("Workspace", sections, horizontal=True, key="main_navigation")
-if active_section == "Review payments":
-    with st.container(key="workbench"):
-        selected_evidence = render_payment_browser()
-        if selected_evidence:
-            selected_order = selected_evidence["order"]
-            description = payment_description(selected_evidence)
-            render_payment_overview(selected_order, description)
-            if not render_merchant_reconciliation(selected_evidence):
-                render_payment_check(selected_order)
-            render_ai_rule_explanation(selected_order)
-            render_payment_records(selected_order, description)
-            render_assumption_tools(selected_order)
-elif active_section == "Sandbox tools":
-    st.caption("Development tools for Sandbox test payments. This is separate from viewing payment records.")
-    linked_payment_notice = st.container()
-    render_authentication()
-    render_payment()
-    with linked_payment_notice:
-        linked_sale = next((sale for sale in get_merchant_sales() if sale["paypal_order_id"] == st.session_state.get("paypal_order_id")), None)
-        if linked_sale:
-            st.info(f"Active linked PayPal order: {linked_sale['paypal_order_id']} | Test sales order: {linked_sale['sale_id']} | Expected: {linked_sale['amount']} {linked_sale['currency']}")
+if application_mode == "Guided demo":
+    render_guided_demo()
+else:
+    sections = ["Review payments", "Sandbox tools", "Test sales orders"]
+    initial_section = "Sandbox tools" if st.query_params.get("create_attempt") or st.query_params.get("token") else "Review payments"
+    if "main_navigation" not in st.session_state:
+        st.session_state["main_navigation"] = initial_section
+    with st.container(key="sandbox_navigation"):
+        st.markdown("""<style>
+        .st-key-sandbox_navigation [role="radiogroup"] {
+            display: flex; flex-wrap: wrap; gap: 0.7rem;
+        }
+        .st-key-sandbox_navigation [role="radiogroup"] label {
+            background: #ffffff; color: #13263d; border: 1px solid #a9b9c9;
+            border-radius: 10px; padding: 0.7rem 1rem; max-width: 100%;
+            white-space: normal; overflow-wrap: anywhere; box-sizing: border-box;
+            cursor: pointer;
+        }
+        .st-key-sandbox_navigation [role="radiogroup"] label p { color: #13263d; }
+        .st-key-sandbox_navigation [role="radiogroup"] label:hover { border-color: #0f766e; }
+        .st-key-sandbox_navigation [role="radiogroup"] label:has(input:checked) {
+            background: #d8f1e9; border: 2px solid #0f766e;
+        }
+        .st-key-sandbox_navigation [role="radiogroup"] label:focus-within {
+            outline: 3px solid #13263d; outline-offset: 2px;
+        }
+        @media (max-width: 600px) {
+            .st-key-sandbox_navigation [role="radiogroup"] label { width: 100%; }
+        }
+        </style>""", unsafe_allow_html=True)
+        active_section = st.radio("Workspace", sections, horizontal=True, key="main_navigation")
+    if active_section == "Review payments":
+        with st.container(key="workbench"):
+            selected_evidence = render_payment_browser()
+            if selected_evidence:
+                selected_order = selected_evidence["order"]
+                description = payment_description(selected_evidence)
+                render_payment_overview(selected_order, description)
+                st.caption("Discussing: " + discussion_label(selected_evidence))
+                if st.session_state.get("selected_payment_id") != selected_order["order_id"]:
+                    st.warning("Selection pending. These details and the assistant still belong to the opened payment " + short_payment_reference(selected_order["order_id"]) + ". Click Review payment to switch.")
+                linked_merchant = render_merchant_reconciliation(selected_evidence)
+                render_payment_assistant(selected_evidence, lambda order_id: get_review_view_snapshot((order_id,))["by_id"].get(order_id))
+                if not linked_merchant:
+                    with st.expander("Optional local-order expectation check", expanded=False):
+                        render_payment_check(selected_order)
+                with st.expander("Optional simulated rule tools", expanded=False):
+                    render_ai_rule_explanation(selected_order)
+                    render_assumption_tools(selected_order)
+                render_payment_records(selected_order, description)
+                if linked_merchant:
+                    with st.expander("Optional provider evidence refresh", expanded=False):
+                        render_provider_refresh(selected_order["order_id"])
+    elif active_section == "Sandbox tools":
+        st.caption("Development tools for Sandbox test payments. This is separate from viewing payment records.")
+        linked_payment_notice = st.container()
+        render_authentication()
+        render_payment()
+        with linked_payment_notice:
+            linked_sale = next((sale for sale in get_merchant_sales() if sale["paypal_order_id"] == st.session_state.get("paypal_order_id")), None)
+            if linked_sale:
+                st.info(f"Active linked PayPal order: {linked_sale['paypal_order_id']} | Test sales order: {linked_sale['sale_id']} | Expected: {linked_sale['amount']} {linked_sale['currency']}")
 
-elif active_section == "Test sales orders":
-    render_merchant_orders()
+    elif active_section == "Test sales orders":
+        render_merchant_orders()

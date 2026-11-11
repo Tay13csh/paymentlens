@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import order_store as store
 import paypal_auth
@@ -26,7 +27,7 @@ class PaymentNavigationTests(unittest.TestCase):
             call.assert_not_called()
 
     def app(self):
-        app = AppTest.from_file(str(fixtures.APP)).run()
+        app = sandbox_test_app(str(fixtures.APP)).run()
         self.assertFalse(app.exception)
         return app
 
@@ -95,7 +96,7 @@ class PaymentNavigationTests(unittest.TestCase):
         sale, attempt = self.linked(order_id="PAYMENT-A")
         app = self.app()
         self.activate(app, sale)
-        refreshed = AppTest.from_file(str(fixtures.APP))
+        refreshed = sandbox_test_app(str(fixtures.APP))
         refreshed.query_params.update(app.query_params)
         refreshed.run()
         self.assertFalse(refreshed.exception)

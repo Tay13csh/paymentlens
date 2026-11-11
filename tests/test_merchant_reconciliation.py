@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 from fastapi import HTTPException
 
 import order_store as store
@@ -137,7 +138,7 @@ class MerchantReconciliationTests(unittest.TestCase):
             ("11.00", "CAD", "ORDER_QUERY", "2026-11-10T12:01:00Z"),
         })
         self.assertTrue(all(item["recorded_at"] for item in snapshots))
-        app = AppTest.from_file(str(APP)).run()
+        app = sandbox_test_app(str(APP)).run()
         app.selectbox(key="review_order_id").select("ORDER").run()
         app.button(key="open_payment_review").click().run()
         details = next(item for item in app.expander if item.label == "Reconciliation evidence")
@@ -487,7 +488,7 @@ class MerchantReconciliationTests(unittest.TestCase):
         self.assertEqual(store.get_sale_reconciliation("ORDER")["captures"], [])
 
     def test_page_saves_merchant_expectation_without_external_requests(self):
-        app = AppTest.from_file(str(APP)).run()
+        app = sandbox_test_app(str(APP)).run()
         app.radio(key="main_navigation").set_value("Test sales orders").run()
         next(item for item in app.text_input if item.label == "Test order description").set_value("Test mug")
         next(item for item in app.text_input if item.label == "Merchant expected amount (CAD)").set_value("12.00")
@@ -504,12 +505,12 @@ class MerchantReconciliationTests(unittest.TestCase):
         with patch.object(st, "secrets", settings), patch.object(paypal_auth, "create_order", side_effect=[
             paypal_auth.PayPalOrderError("simulated timeout"), ("ORDER", "https://example.invalid/approve")
         ]) as create, patch.object(paypal_auth, "capture_order", return_value=observation) as capture:
-            app = AppTest.from_file(str(APP)).run()
+            app = sandbox_test_app(str(APP)).run()
             app.radio(key="main_navigation").set_value("Test sales orders").run()
             app.button(key="create_merchant_payment").click().run()
             self.assertFalse(app.exception)
             first_attempt = store.begin_sale_creation(sale)
-            app = AppTest.from_file(str(APP)).run()
+            app = sandbox_test_app(str(APP)).run()
             app.radio(key="main_navigation").set_value("Test sales orders").run()
             app.button(key="create_merchant_payment").click().run()
             self.assertFalse(app.exception)

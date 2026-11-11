@@ -10,6 +10,7 @@ import httpx
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import ai_explanation
 import order_store
@@ -132,7 +133,7 @@ class AIReviewPageTests(unittest.TestCase):
         return value
 
     def analyzed_app(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         app.selectbox(key="review_order_id").select("PRIVATE-ORDER-A").run()
         app.button(key="open_payment_review").click().run()
         app.button(key="analyze_saved_order").click().run()

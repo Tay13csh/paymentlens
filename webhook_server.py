@@ -9,23 +9,26 @@ from typing import Dict
 import toml
 from fastapi import FastAPI, HTTPException, Request
 
+from runtime_config import configuration_status
 from order_store import InvalidWebhookEventError, WebhookStorageFullError, record_webhook_event
 from paypal_auth import PayPalAuthError, PayPalWebhookError, verify_webhook_signature
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SECRETS_PATH = PROJECT_ROOT / ".streamlit" / "secrets.toml"
-app = FastAPI(title="PayGuard AI PayPal Webhook Receiver")
+app = FastAPI(title="PaymentLens PayPal Webhook Receiver")
 
 
 def load_paypal_settings() -> Dict[str, str]:
     if not SECRETS_PATH.is_file():
         raise ValueError("Local PayPal settings are missing.")
     settings = toml.load(SECRETS_PATH).get("paypal", {})
+    if not isinstance(settings, dict):
+        raise ValueError("Local PayPal settings have an invalid structure.")
     client_id = settings.get("client_id")
     client_secret = settings.get("client_secret")
     webhook_id = settings.get("webhook_id")
-    if not all(isinstance(value, str) and value for value in (client_id, client_secret, webhook_id)):
+    if not configuration_status({"paypal": settings})[1]["webhook"]:
         raise ValueError("Required PayPal settings are missing.")
     return {
         "client_id": client_id,

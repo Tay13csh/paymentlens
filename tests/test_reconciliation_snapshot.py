@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import order_store as store
 import test_merchant_reconciliation as fixtures
@@ -138,7 +139,7 @@ class ReconciliationSnapshotTests(unittest.TestCase):
         stale_order = store.get_order("ORDER")
         store.update_order_status("ORDER", "REFUNDED")
         with patch.object(store, "get_order", return_value=stale_order):
-            app = AppTest.from_file(str(fixtures.APP)).run()
+            app = sandbox_test_app(str(fixtures.APP)).run()
             app.selectbox(key="review_order_id").select("ORDER").run()
             app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)

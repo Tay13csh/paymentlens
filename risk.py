@@ -1,4 +1,4 @@
-# PayGuard AI - Risk Analysis
+# PaymentLens - Risk Analysis
 # This program calculates transaction risk scores based on spending patterns.
 
 

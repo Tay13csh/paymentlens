@@ -9,6 +9,7 @@ from unittest.mock import patch
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import order_store
 import paypal_auth
@@ -46,7 +47,7 @@ class PaymentEvidenceTests(unittest.TestCase):
         return {"id": event_id, "event_type": event_type, "resource": resource}
 
     def app(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         if app.selectbox:
             app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)

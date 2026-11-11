@@ -9,6 +9,7 @@ from unittest.mock import patch
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import ai_explanation
 import order_store
@@ -41,7 +42,7 @@ class FirstUseTests(unittest.TestCase):
         order_store.update_order_status(order_id, status)
 
     def app(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         self.assertFalse(app.exception)
         return app
 

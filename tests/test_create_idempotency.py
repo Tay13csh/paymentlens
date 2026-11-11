@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import order_store
 import paypal_auth
@@ -59,7 +60,7 @@ class CreateIdempotencyTests(unittest.TestCase):
         self.assertFalse(app.exception)
 
     def test_timeout_retry_reuses_request_key_and_payload(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         self.click(app, "Create Sandbox Order")
         self.click(app, "Retry Same Order Creation")
         first_key = self.calls[0]["headers"].get("PayPal-Request-Id")
@@ -71,14 +72,14 @@ class CreateIdempotencyTests(unittest.TestCase):
 
     def refresh(self, app):
         # A new AppTest has no previous session_state, like a browser refresh.
-        refreshed = AppTest.from_file(str(APP_PATH))
+        refreshed = sandbox_test_app(str(APP_PATH))
         refreshed.query_params.update(app.query_params)
         refreshed.run()
         self.assertFalse(refreshed.exception)
         return refreshed
 
     def test_refresh_restores_retry_key_and_original_amount_then_new_order_gets_new_key(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         self.click(app, "Create Sandbox Order")
         attempt_id = app.query_params["create_attempt"]
         if isinstance(attempt_id, list):
@@ -101,7 +102,7 @@ class CreateIdempotencyTests(unittest.TestCase):
 
     def test_successful_creation_refresh_restores_order_without_resending(self):
         self.timeout_next = False
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         self.click(app, "Create Sandbox Order")
         app = self.refresh(app)
         self.assertEqual(len(self.calls), 1)
@@ -111,7 +112,7 @@ class CreateIdempotencyTests(unittest.TestCase):
 
     def test_local_save_failure_retains_key_for_recovery(self):
         self.timeout_next = False
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         with patch("order_store.complete_order_creation", side_effect=RuntimeError("synthetic write failure")):
             self.click(app, "Create Sandbox Order")
         self.assertEqual(order_store.get_orders(), [])
@@ -122,7 +123,7 @@ class CreateIdempotencyTests(unittest.TestCase):
         self.assertEqual(len(order_store.get_orders()), 1)
 
     def test_missing_attempt_does_not_silently_retry_with_new_key(self):
-        app = AppTest.from_file(str(APP_PATH))
+        app = sandbox_test_app(str(APP_PATH))
         app.query_params["create_attempt"] = "missing-attempt"
         app.run()
         self.assertTrue(app.warning)

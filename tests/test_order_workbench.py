@@ -9,6 +9,7 @@ from unittest.mock import patch
 import requests
 import streamlit as st
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import ai_explanation
 import order_store
@@ -47,7 +48,7 @@ class OrderWorkbenchTests(unittest.TestCase):
             order_store.update_order_status(order_id, status)
 
     def app(self):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         if app.selectbox:
             app.button(key="open_payment_review").click().run()
         self.assertFalse(app.exception)
@@ -166,7 +167,8 @@ class OrderWorkbenchTests(unittest.TestCase):
     def test_project_interface_uses_english_subtitle_and_text(self):
         self.save("REVIEW")
         app = self.app()
-        self.assertTrue(any(item.value == "Review a payment and its supporting records." for item in app.markdown))
+        self.assertTrue(any(item.value == "AI-assisted payment reconciliation" for item in app.markdown))
+        self.assertEqual(app.title[0].value, "PaymentLens")
         text = "\n".join(
             item.value for kind in ("title", "subheader", "markdown", "caption", "info", "warning", "error", "success")
             for item in getattr(app, kind)
@@ -178,7 +180,7 @@ class OrderWorkbenchTests(unittest.TestCase):
         attempt = order_store.begin_order_creation("10.00")
         order_store.complete_order_creation(attempt, "PAID", "https://example.invalid/approve")
         order_store.update_order_status("PAID", "COMPLETED", "SYNTHETIC-CAPTURE")
-        app = AppTest.from_file(str(APP_PATH))
+        app = sandbox_test_app(str(APP_PATH))
         app.query_params["create_attempt"] = attempt
         app.query_params["token"] = "PAID"
         app.run()
@@ -193,7 +195,7 @@ class OrderWorkbenchTests(unittest.TestCase):
 
     def test_approval_return_alone_is_not_presented_as_payment_completed(self):
         self.save("APPROVED", status="APPROVED")
-        app = AppTest.from_file(str(APP_PATH))
+        app = sandbox_test_app(str(APP_PATH))
         app.query_params["token"] = "APPROVED"
         app.run()
         self.assertFalse(app.exception)

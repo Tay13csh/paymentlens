@@ -219,7 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# PayGuard local credentials and runtime data
+# PaymentLens local credentials and runtime data
 payguard.db
 .env.*
 *.pem

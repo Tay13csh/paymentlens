@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import ai_explanation
 import order_store as store
@@ -46,7 +47,7 @@ class PaymentViewTests(unittest.TestCase):
         }]}, order_id, "ORDER_QUERY")
 
     def app(self):
-        app = AppTest.from_file(str(fixtures.APP)).run()
+        app = sandbox_test_app(str(fixtures.APP)).run()
         self.assertFalse(app.exception)
         return app
 
@@ -202,7 +203,7 @@ class PaymentViewTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             connection.execute("UPDATE orders SET updated_at='2030-01-01' WHERE order_id<>'OLDER'")
             connection.execute("UPDATE orders SET updated_at='2000-01-01' WHERE order_id='OLDER'")
-        app = AppTest.from_file(str(fixtures.APP))
+        app = sandbox_test_app(str(fixtures.APP))
         app.session_state["selected_payment_id"] = "OLDER"
         app.session_state["opened_payment_id"] = "OLDER"
         app.run()

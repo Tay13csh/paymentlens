@@ -12,6 +12,7 @@ import requests
 import streamlit as st
 from fastapi import HTTPException
 from streamlit.testing.v1 import AppTest
+from ui_helpers import sandbox_test_app
 
 import order_store
 import paypal_auth
@@ -58,7 +59,7 @@ class CaptureSafetyTests(unittest.TestCase):
             order_store.update_order_status(order_id, status)
 
     def run_app_for_order(self, order_id):
-        app = AppTest.from_file(str(APP_PATH)).run()
+        app = sandbox_test_app(str(APP_PATH)).run()
         app.query_params["token"] = order_id
         app.radio(key="main_navigation").set_value("Sandbox tools").run()
         return app
