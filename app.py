@@ -61,6 +61,17 @@ st.markdown(
         color: #13263d;
         overflow-wrap: anywhere;
     }
+    .st-key-workbench [role="radiogroup"] { flex-wrap: wrap; gap: 0.6rem; }
+    .st-key-workbench [role="radiogroup"] label {
+        border: 1px solid #a9b9c9; border-radius: 10px; padding: 0.4rem 0.6rem;
+        max-width: 100%; white-space: normal;
+    }
+    .st-key-workbench [role="radiogroup"] label:has(input:checked) {
+        background: #d5eeea; border: 2px solid #0f766e;
+    }
+    .st-key-workbench [role="radiogroup"] label:focus-within {
+        outline: 3px solid #13263d; outline-offset: 2px;
+    }
     .stApp h1 { letter-spacing: -0.035em; }
     .stApp h2 { font-size: 1.35rem; margin-top: 0.6rem; }
     .stApp h3 { font-size: 1.1rem; }
@@ -502,8 +513,35 @@ def payment_amount(order):
         return "Not recorded"
 
 
+FILTER_CATEGORIES = ("All", "Matched", "Needs attention", "Insufficient information")
+ATTENTION_REASONS = (
+    "AMOUNT_DIFFERENCE", "CURRENCY_MISMATCH", "EVIDENCE_CONFLICT",
+    "UNSUPPORTED_STRUCTURE", "REFUNDED", "REVERSED", "DENIED",
+)
+FILTER_REASON_LABELS = {**REVIEW_REASON_LABELS, "DENIED": "Payment denied — local record"}
+
+
+def payment_category(evidence):
+    """Organize existing conclusions; never calculate a second reconciliation."""
+    result = evidence["result"]
+    if set(result["reasons"]).intersection(ATTENTION_REASONS):
+        return "Needs attention"
+    if result["code"] == "MATCH":
+        return "Matched"
+    if result["code"] in {"HISTORY", "INCOMPLETE"}:
+        return "Insufficient information"
+    # Unknown non-matching conclusions must remain visible for attention.
+    return "Needs attention"
+
+
+def clear_payment_filters():
+    st.session_state["review_filter"] = "All"
+    st.session_state["payment_search"] = ""
+    st.session_state["payment_reason_filters"] = []
+
+
 def review_reason_text(evidence):
-    return " · ".join(REVIEW_REASON_LABELS[reason] for reason in evidence["result"]["reasons"]) or "Matches saved Capture record"
+    return " · ".join(FILTER_REASON_LABELS[reason] for reason in evidence["result"]["reasons"]) or "Matches saved Capture record"
 
 
 def table_text(value):
@@ -515,7 +553,6 @@ def table_text(value):
 
 def render_payment_browser():
     st.subheader("Recent payments")
-    mode = st.radio("Show payments", ["All in this view", "Needs review"], horizontal=True, key="review_filter")
     st.caption("Scope: most recent 20 saved payments, sorted by local update time. Older records are not included.")
     try:
         view = get_review_view_snapshot((st.session_state.get("selected_payment_id"), st.session_state.get("opened_payment_id")))
@@ -523,9 +560,29 @@ def render_payment_browser():
         st.error("Payment view unavailable. The local database could not be read or its schema is not ready. No review count is available; nothing was created or migrated.")
         return None
     payments, by_id = view["payments"], view["by_id"]
-    visible = [item for item in payments if mode == "All in this view" or item["result"]["needs_review"]]
-    needs_review_count = sum(item["result"]["needs_review"] for item in payments)
-    st.caption(f"Needs review: {needs_review_count} of {len(payments)} in this view. Historical data gaps are not confirmed payment discrepancies.")
+    counts = {category: sum(payment_category(item) == category for item in payments)
+              for category in FILTER_CATEGORIES[1:]}
+    counts["All"] = len(payments)
+    if st.session_state.get("review_filter") not in FILTER_CATEGORIES:
+        st.session_state["review_filter"] = "All"
+    mode = st.radio("Show payments", FILTER_CATEGORIES, horizontal=True, key="review_filter",
+                    format_func=lambda category: f"{category} ({counts[category]})")
+    st.caption("Category counts cover the most recent 20 only and do not change with search or reason filters. "
+               "Matched means this local reconciliation passed, not transaction safety or bank settlement.")
+    query = st.text_input("Search merchant description or order ID", key="payment_search").strip().casefold()
+    st.button("Clear filters", key="clear_payment_filters", on_click=clear_payment_filters)
+    reasons = []
+    if mode == "Needs attention":
+        reasons = st.multiselect("Attention reasons — match any selected reason", ATTENTION_REASONS,
+                                 key="payment_reason_filters", format_func=lambda reason: FILTER_REASON_LABELS[reason])
+    visible = []
+    for item in payments:
+        sale = item["sale"] or {}
+        search_text = " ".join((sale.get("description") or "", sale.get("sale_id") or "", item["order"]["order_id"])).casefold()
+        if (mode == "All" or payment_category(item) == mode) and (not query or query in search_text):
+            if not reasons or set(reasons).intersection(item["result"]["reasons"]):
+                visible.append(item)
+    st.caption(f"Showing {len(visible)} of {len(payments)} in this view. Historical data gaps are not confirmed payment discrepancies.")
     if "selected_payment_id" not in st.session_state:
         st.session_state["selected_payment_id"] = visible[0]["order"]["order_id"] if visible else None
     selected_id = st.session_state["selected_payment_id"]
@@ -549,7 +606,8 @@ def render_payment_browser():
             rows.append("| " + " | ".join(table_text(value) for value in cells) + " |")
         st.markdown("\n".join(rows))
     else:
-        st.info("No payments need review within the most recent 20 records. Older records were not checked.")
+        st.info("No payments match these filters within the most recent 20 records. Older records were not checked.")
+        st.button("Show all in this view", key="show_all_payments", on_click=clear_payment_filters)
     options = [item["order"]["order_id"] for item in visible]
     selected_id = st.session_state["selected_payment_id"]
     recent_ids = {item["order"]["order_id"] for item in payments}
@@ -1279,7 +1337,7 @@ def render_merchant_orders():
 
 # Preserve owned inputs while their section is not rendered by native navigation.
 for input_key in list(st.session_state):
-    if input_key in {"review_order_id", "review_filter", "merchant_sale_id", "sandbox_order_amount"} or (
+    if input_key in {"review_order_id", "review_filter", "payment_search", "payment_reason_filters", "merchant_sale_id", "sandbox_order_amount"} or (
         input_key.startswith(("simulated_average_", "expected_amount_", "expected_currency_", "sensitivity_baseline_", "what_if_amount_"))
         and "_preset_" not in input_key
     ):

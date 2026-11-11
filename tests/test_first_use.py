@@ -63,7 +63,7 @@ class FirstUseTests(unittest.TestCase):
         app = self.app()
         review = app
         self.assertTrue(any("No saved payments" in item.value and "Sandbox tools section" in item.value and "Create Sandbox Order" in item.value for item in review.info))
-        self.assertFalse(review.button)
+        self.assertEqual([button.key for button in review.button], ["clear_payment_filters"])
         self.assertFalse(review.number_input)
         app.radio(key="main_navigation").set_value("Sandbox tools").run()
         self.assertTrue(any(button.label == "Create Sandbox Order" for button in app.button))

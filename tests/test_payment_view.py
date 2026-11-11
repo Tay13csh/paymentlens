@@ -131,9 +131,9 @@ class PaymentViewTests(unittest.TestCase):
             self.assertEqual(set(result["reasons"]), reasons)
             self.assertEqual(result["needs_review"], code != "MATCH")
         app = self.app()
-        app.radio(key="review_filter").set_value("Needs review").run()
+        app.radio(key="review_filter").set_value("Needs attention").run()
         table = self.table(app)
-        for reason in ("AMOUNT_DIFFERENCE", "CURRENCY_MISMATCH", "EVIDENCE_CONFLICT", "CAPTURE_EVIDENCE_INCOMPLETE", "REFUNDED", "REVERSED", "HISTORY"):
+        for reason in ("AMOUNT_DIFFERENCE", "CURRENCY_MISMATCH", "EVIDENCE_CONFLICT", "REFUNDED", "REVERSED"):
             self.assertIn(REVIEW_REASON_LABELS[reason], table)
         self.assertNotIn("high risk", table.lower())
         self.assertNotIn("payment failed", table.lower())
@@ -150,7 +150,7 @@ class PaymentViewTests(unittest.TestCase):
         app.run()
         analysis = dict(app.session_state["risk_analysis"])
         before = self.dump()
-        app.radio(key="review_filter").set_value("Needs review").run()
+        app.radio(key="review_filter").set_value("Needs attention").run()
         self.assertFalse(app.exception)
         self.assertEqual(app.selectbox(key="review_order_id").value, "MATCH")
         self.assertTrue(any("Outside current filter" in item.value for item in app.info))
@@ -163,7 +163,7 @@ class PaymentViewTests(unittest.TestCase):
         self.assertEqual(app.session_state["opened_payment_id"], "MATCH")
         app.button(key="open_payment_review").click().run()
         self.assertEqual(app.session_state["opened_payment_id"], "DIFFERENCE")
-        app.radio(key="review_filter").set_value("All in this view").run()
+        app.radio(key="review_filter").set_value("All").run()
         self.assertEqual(app.selectbox(key="review_order_id").value, "DIFFERENCE")
         self.assertEqual(self.dump(), before)
 
@@ -206,9 +206,9 @@ class PaymentViewTests(unittest.TestCase):
         app.session_state["selected_payment_id"] = "OLDER"
         app.session_state["opened_payment_id"] = "OLDER"
         app.run()
-        app.radio(key="review_filter").set_value("Needs review").run()
+        app.radio(key="review_filter").set_value("Needs attention").run()
         self.assertFalse(app.exception)
-        self.assertTrue(any("Needs review: 0 of 20" in item.value for item in app.caption))
+        self.assertTrue(any("Showing 0 of 20" in item.value for item in app.caption))
         self.assertTrue(any("Outside recent 20" in item.value for item in app.info))
         self.assertTrue(any("Older records were not checked" in item.value for item in app.info))
         self.assertEqual(app.selectbox(key="review_order_id").value, "OLDER")
@@ -220,10 +220,10 @@ class PaymentViewTests(unittest.TestCase):
         app = self.app()
         self.open(app, "ORDER")
         app.session_state["paypal_order_id"] = "PAYMENT-TARGET"
-        app.radio(key="review_filter").set_value("Needs review").run()
+        app.radio(key="review_filter").set_value("Needs attention").run()
         app.radio(key="main_navigation").set_value("Test sales orders").run()
         app.radio(key="main_navigation").set_value("Review payments").run()
-        self.assertEqual(app.radio(key="review_filter").value, "Needs review")
+        self.assertEqual(app.radio(key="review_filter").value, "Needs attention")
         self.assertEqual(app.session_state["paypal_order_id"], "PAYMENT-TARGET")
         self.assertEqual(app.session_state["opened_payment_id"], "ORDER")
 
@@ -250,15 +250,15 @@ class PaymentViewTests(unittest.TestCase):
              patch.object(store, "get_sale_reconciliation", side_effect=AssertionError("Use shared view snapshot")):
             app = self.app()
             self.open(app, "ORDER")
-            app.radio(key="review_filter").set_value("Needs review").run()
-            app.radio(key="review_filter").set_value("All in this view").run()
+            app.radio(key="review_filter").set_value("Needs attention").run()
+            app.radio(key="review_filter").set_value("All").run()
             self.assertFalse(app.exception)
         self.assertEqual(self.dump(), before)
 
     def test_missing_database_and_old_schema_are_not_created_or_migrated(self):
         self.assertFalse(self.db.exists())
         app = self.app()
-        app.radio(key="review_filter").set_value("Needs review").run()
+        app.radio(key="review_filter").set_value("Needs attention").run()
         self.assertFalse(self.db.exists())
         with sqlite3.connect(self.db) as connection:
             connection.execute("CREATE TABLE orders(order_id TEXT PRIMARY KEY, amount TEXT, currency TEXT, status TEXT, updated_at TEXT)")
@@ -267,8 +267,102 @@ class PaymentViewTests(unittest.TestCase):
         app.run()
         self.assertFalse(app.exception)
         self.assertTrue(any("Payment view unavailable" in item.value for item in app.error))
-        self.assertFalse(any("Needs review:" in item.value for item in app.caption))
+        self.assertFalse(any("Showing " in item.value for item in app.caption))
         self.assertEqual(self.dump(), before)
+
+    def test_four_categories_priority_and_fixed_counts(self):
+        self.sale("MATCH")
+        self.sale("DIFFERENCE", expected="12.00")
+        self.sale("INCOMPLETE", captured=None)
+        store.save_order("HISTORY", "10.00")
+        self.sale("REFUND-INCOMPLETE", captured=None)
+        store.update_order_status("REFUND-INCOMPLETE", "REFUNDED")
+        self.sale("DENIED-INCOMPLETE", captured=None)
+        store.update_order_status("DENIED-INCOMPLETE", "DENIED")
+        app = self.app()
+        self.assertEqual(app.radio(key="review_filter").options,
+                         ["All (6)", "Matched (1)", "Needs attention (3)", "Insufficient information (2)"])
+        app.radio(key="review_filter").set_value("Needs attention").run()
+        self.assertIn("Refunded", self.table(app))
+        self.assertIn("Capture evidence incomplete", self.table(app))
+        self.assertIn("Payment denied", self.table(app))
+        self.assertNotIn("chargeback", self.table(app).lower())
+        self.assertNotIn("dispute", self.table(app).lower())
+        app.radio(key="review_filter").set_value("Insufficient information").run()
+        self.assertIn("Historical data insufficient", self.table(app))
+        self.assertNotIn("Payment denied", self.table(app))
+        self.assertNotIn("Amount difference", self.table(app))
+
+    def test_search_description_both_full_ids_and_counts_do_not_change(self):
+        sale = self.sale("PAYPAL-ALPHA", description="Handmade Mug")
+        self.sale("PAYPAL-BETA", description="Glass bowl", expected="12.00")
+        app = self.app()
+        counts = app.radio(key="review_filter").options
+        for query in ("HANDMADE", "paypal-alpha", sale.lower()):
+            app.text_input(key="payment_search").set_value(query).run()
+            self.assertIn("Handmade Mug", self.table(app))
+            self.assertNotIn("Glass bowl", self.table(app))
+            self.assertEqual(app.radio(key="review_filter").options, counts)
+            self.assertTrue(any("Showing 1 of 2" in item.value for item in app.caption))
+
+    def test_reason_multiselect_is_or_and_keeps_multiple_known_reasons(self):
+        self.sale("DIFFERENCE", description="Different mug", expected="12.00")
+        store.update_order_status("DIFFERENCE", "REFUNDED")
+        self.sale("CURRENCY", description="Currency mug", currency="USD")
+        self.sale("INCOMPLETE", description="Incomplete mug", captured=None)
+        app = self.app()
+        app.radio(key="review_filter").set_value("Needs attention").run()
+        app.multiselect(key="payment_reason_filters").set_value(["AMOUNT_DIFFERENCE", "CURRENCY_MISMATCH"]).run()
+        self.assertIn("Different mug", self.table(app))
+        self.assertIn("Currency mug", self.table(app))
+        self.assertIn("Refunded", self.table(app))
+        self.assertNotIn("Incomplete mug", self.table(app))
+        app.multiselect(key="payment_reason_filters").set_value(["EVIDENCE_CONFLICT"]).run()
+        self.assertFalse(any(item.value.startswith("| Payment |") for item in app.markdown))
+        app.button(key="show_all_payments").click().run()
+        self.assertEqual(app.radio(key="review_filter").value, "All")
+        self.assertEqual(app.session_state["payment_reason_filters"], [])
+        self.assertIn("Incomplete mug", self.table(app))
+
+    def test_search_clear_and_navigation_preserve_opened_payment_and_results(self):
+        self.sale("MATCH", description="Matching mug")
+        self.sale("OTHER", description="Other mug", expected="12.00")
+        app = self.app()
+        self.open(app, "MATCH")
+        app.number_input(key="simulated_average_CAD").set_value(5.0).run()
+        app.button(key="analyze_saved_order").click().run()
+        app.session_state["ai_explanation"] = "Saved rule observation"
+        app.session_state["paypal_order_id"] = "SEPARATE-TARGET"
+        app.run()
+        analysis = dict(app.session_state["risk_analysis"])
+        before = self.dump()
+        app.radio(key="review_filter").set_value("Needs attention").run()
+        app.multiselect(key="payment_reason_filters").set_value(["AMOUNT_DIFFERENCE"]).run()
+        app.text_input(key="payment_search").set_value("not found").run()
+        self.assertEqual(app.selectbox(key="review_order_id").value, "MATCH")
+        self.assertTrue(any("Outside current filter" in item.value for item in app.info))
+        app.radio(key="main_navigation").set_value("Test sales orders").run()
+        app.radio(key="main_navigation").set_value("Review payments").run()
+        self.assertEqual(app.text_input(key="payment_search").value, "not found")
+        self.assertEqual(app.multiselect(key="payment_reason_filters").value, ["AMOUNT_DIFFERENCE"])
+        app.button(key="clear_payment_filters").click().run()
+        self.assertEqual(app.text_input(key="payment_search").value, "")
+        self.assertEqual(app.radio(key="review_filter").value, "All")
+        self.assertEqual(app.session_state["opened_payment_id"], "MATCH")
+        self.assertEqual(app.session_state["paypal_order_id"], "SEPARATE-TARGET")
+        self.assertEqual(dict(app.session_state["risk_analysis"]), analysis)
+        self.assertEqual(app.session_state["ai_explanation"], "Saved rule observation")
+        self.assertEqual(self.dump(), before)
+
+    def test_classification_does_not_invent_conflicting_amount_differences(self):
+        self.sale("CONFLICT", expected="12.00")
+        store.record_payment_observation("CONFLICT", self.observation("CONFLICT", "11.00"))
+        app = self.app()
+        app.radio(key="review_filter").set_value("Needs attention").run()
+        self.assertIn("Evidence conflict", self.table(app))
+        self.assertNotIn("Amount difference", self.table(app))
+        app.multiselect(key="payment_reason_filters").set_value(["AMOUNT_DIFFERENCE"]).run()
+        self.assertFalse(any(item.value.startswith("| Payment |") for item in app.markdown))
 
     def test_recent_view_is_one_read_only_snapshot_during_concurrent_fill(self):
         self.sale("A", captured=None)
