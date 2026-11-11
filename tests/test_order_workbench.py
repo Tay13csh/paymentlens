@@ -67,12 +67,13 @@ class OrderWorkbenchTests(unittest.TestCase):
     def test_empty_page_has_visible_payment_entry_and_collapsed_developer_tools(self):
         app = self.app()
         self.assertFalse(app.selectbox)
+        self.assertTrue(any("No saved payments" in item.value for item in app.info))
+        self.assertIn("Sandbox tools", app.radio(key="main_navigation").options)
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
         self.assertTrue(any(button.label == "Create Sandbox Order" for button in app.button))
-        self.assertTrue(any(tab.label == "Sandbox tools" for tab in app.tabs))
         tools = next(expander for expander in app.expander if expander.label == "Authentication")
         self.assertFalse(tools.proto.expanded)
         self.assertTrue(any(button.label == "Get Sandbox Access Token" for button in app.button))
-        self.assertTrue(any("No saved payments" in item.value for item in app.info))
         self.assert_no_requests()
 
     def test_list_displays_saved_payment_fields_without_invented_risk_or_payment_time(self):
@@ -102,6 +103,7 @@ class OrderWorkbenchTests(unittest.TestCase):
         self.select(app, "REVIEW-A")
         self.select(app, "REVIEW-B")
         self.assertEqual(app.session_state["paypal_order_id"], "PAYMENT")
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
         self.assertTrue(any("Current payment order ID: PAYMENT" in item.value for item in app.markdown))
         self.assert_no_requests()
 
@@ -139,9 +141,11 @@ class OrderWorkbenchTests(unittest.TestCase):
         capture = self.api["capture_order"]
         capture.side_effect = None
         capture.return_value = ("COMPLETED", "SYNTHETIC-CAPTURE")
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
         next(button for button in app.button if button.label == "Capture Approved Order").click().run()
         self.assertFalse(app.exception)
         capture.assert_called_once_with("synthetic-id", "synthetic-secret", "PAYMENT")
+        app.radio(key="main_navigation").set_value("Review payments").run()
         self.assertEqual(app.selectbox(key="review_order_id").value, "REVIEW")
         self.assertEqual(order_store.get_order("PAYMENT")["status"], "COMPLETED")
         self.requests.assert_not_called()
@@ -203,7 +207,7 @@ class OrderWorkbenchTests(unittest.TestCase):
         order_store.update_order_status("REFUND", "REFUNDED")
         app = self.app()
         app.session_state["paypal_order_id"] = "REFUND"
-        app.run()
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
         self.assertFalse(app.exception)
         self.assertFalse(any(item.value == "Payment completed" for item in app.success))
         self.assertTrue(any("Current payment status: REFUNDED" in item.value for item in app.caption))

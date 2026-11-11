@@ -24,6 +24,11 @@ from paypal_auth import (
     get_order_status,
 )
 from order_store import (
+    create_merchant_sale,
+    get_merchant_sales,
+    begin_sale_creation,
+    get_sale_reconciliation,
+    record_payment_observation,
     begin_capture,
     begin_order_creation,
     complete_order_creation,
@@ -60,22 +65,105 @@ st.markdown(
     .stApp h3 { font-size: 1.1rem; }
     .stApp [data-testid="stCaptionContainer"] { color: #526277; }
     .stButton > button {
+        background: #ffffff;
+        color: #0f766e;
+        border: 1px solid #0f766e;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+    .stButton > button:hover:not(:disabled) {
+        background: #eaf4f2;
+        color: #115e59;
+        border-color: #115e59;
+    }
+    .stButton > button[kind="primary"] {
+        background: #0f766e;
+        color: #ffffff;
+    }
+    .stButton > button[kind="primary"]:hover:not(:disabled) {
+        background: #115e59;
+        color: #ffffff;
+        border-color: #115e59;
+    }
+    .stButton > button [data-testid="stMarkdownContainer"] { color: inherit; }
+    .stButton > button:focus-visible {
+        outline: 3px solid #13263d;
+        outline-offset: 3px;
+    }
+    .stButton > button:disabled, .stButton > button[kind="primary"]:disabled {
+        background: #e5ebf1;
+        color: #526277;
+        border-color: #d7e2ee;
+    }
+    .stApp [data-testid="stLinkButton"] a {
+        background: #0f766e;
+        color: #ffffff;
+        border: 1px solid #0f766e;
+        border-radius: 10px;
+        font-weight: 600;
+        text-decoration: none;
+    }
+    .stApp [data-testid="stLinkButton"] a [data-testid="stMarkdownContainer"] {
+        color: inherit;
+    }
+    .stApp [data-testid="stLinkButton"] a p { color: inherit; }
+    .stApp [data-testid="stLinkButton"] a:hover:not([aria-disabled="true"]) {
+        background: #115e59;
+        color: #ffffff;
+        border-color: #115e59;
+    }
+    .stApp [data-testid="stLinkButton"] a:focus-visible {
+        outline: 3px solid #13263d;
+        outline-offset: 3px;
+        box-shadow: 0 0 0 2px #ffffff;
+    }
+    .stApp [data-testid="stLinkButton"] a[aria-disabled="true"] {
+        background: #e5ebf1;
+        color: #526277;
+        border-color: #d7e2ee;
+    }
+    .stApp [data-testid="stFormSubmitButton"] button {
         background: #0f766e;
         color: #ffffff;
         border: 1px solid #0f766e;
         border-radius: 10px;
         font-weight: 600;
     }
-    .stButton > button:hover {
+    .stApp [data-testid="stFormSubmitButton"] button [data-testid="stMarkdownContainer"],
+    .stApp [data-testid="stFormSubmitButton"] button p { color: inherit; }
+    .stApp [data-testid="stFormSubmitButton"] button:hover:not(:disabled) {
         background: #115e59;
         color: #ffffff;
         border-color: #115e59;
     }
-    .stButton > button [data-testid="stMarkdownContainer"] { color: inherit; }
-    .stButton > button:disabled {
+    .stApp [data-testid="stFormSubmitButton"] button:focus-visible {
+        outline: 3px solid #13263d;
+        outline-offset: 3px;
+        box-shadow: 0 0 0 2px #ffffff;
+    }
+    .stApp [data-testid="stFormSubmitButton"] button:disabled {
         background: #e5ebf1;
         color: #526277;
         border-color: #d7e2ee;
+    }
+    .stApp [data-testid="stExpander"] details {
+        background: #ffffff;
+        color: #13263d;
+        border-color: #d7e2ee;
+    }
+    .stApp [data-testid="stExpander"] summary {
+        background: #eaf0f7;
+        color: #13263d;
+        border-radius: 10px;
+        cursor: pointer;
+    }
+    .stApp [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"],
+    .stApp [data-testid="stExpander"] summary p { color: inherit; }
+    .stApp [data-testid="stExpander"] summary svg { color: #0f766e; }
+    .stApp [data-testid="stExpander"] summary:hover { background: #d8f1e9; }
+    .stApp [data-testid="stExpander"] summary:focus-visible {
+        outline: 3px solid #0f766e;
+        outline-offset: -3px;
     }
     .stApp input, .stApp textarea,
     .stApp [data-baseweb="select"] > div {
@@ -391,22 +479,45 @@ def short_payment_reference(order_id):
     return "…" + order_id[-6:]
 
 
+def remember_payment_selection():
+    """Keep a stable ID separate from the widget's changing option identity."""
+    st.session_state["selected_payment_id"] = st.session_state.get("review_order_id")
+    st.session_state.pop("payment_selection_missing", None)
+
+
 def render_payment_browser():
     st.subheader("Recent payments")
     st.caption("Up to 20 saved payments, sorted by local record update time.")
     orders = get_orders()
+    orders_by_id = {order["order_id"]: order for order in orders}
+    if "selected_payment_id" not in st.session_state:
+        st.session_state["selected_payment_id"] = next(iter(orders_by_id), None)
+    selected_id = st.session_state["selected_payment_id"]
+    if selected_id and selected_id not in orders_by_id:
+        retained_order = get_order(selected_id)
+        if retained_order:
+            # The recent list is limited; leaving it does not imply deletion.
+            orders_by_id[selected_id] = retained_order
+        else:
+            st.session_state["selected_payment_id"] = None
+            st.session_state["payment_selection_missing"] = True
+            st.session_state.pop("payment_check_result", None)
+    if st.session_state.get("payment_selection_missing"):
+        st.warning("The selected payment is no longer available. Select a payment again and click Review payment.")
     if not orders:
         clear_review()
         st.session_state.pop("opened_payment_id", None)
-        st.info("No saved payments yet. Open the Sandbox tools tab, enter a test amount, and click Create Sandbox Order. Approve and Capture it there, then return to Review payments.")
+        st.session_state.pop("payment_check_result", None)
+        st.info("No saved payments yet. Open the Sandbox tools section, enter a test amount, and click Create Sandbox Order. Approve and Capture it there, then return to Review payments.")
         return None
     rows = ["| Payment | Amount | Currency | Payment status |", "| --- | --- | --- | --- |"]
     for order in orders:
         cells = (short_payment_reference(order["order_id"]), f"{float(order['amount']):.2f}", order["currency"], order["status"])
         rows.append("| " + " | ".join(str(value).replace("|", "\\|").replace("\n", " ") for value in cells) + " |")
     st.markdown("\n".join(rows))
-    orders_by_id = {order["order_id"]: order for order in orders}
     positions = {order_id: index + 1 for index, order_id in enumerate(orders_by_id)}
+    # Restore by ID before registration, even when labels or order have changed.
+    st.session_state["review_order_id"] = st.session_state["selected_payment_id"]
     selected_order_id = st.selectbox(
         "Select a payment",
         options=list(orders_by_id),
@@ -416,8 +527,11 @@ def render_payment_browser():
             f"| {short_payment_reference(order_id)}"
         ),
         key="review_order_id",
+        index=None,
+        placeholder="Choose a payment",
+        on_change=remember_payment_selection,
     )
-    if st.button("Review payment", key="open_payment_review", type="primary"):
+    if st.button("Review payment", key="open_payment_review", type="primary", disabled=selected_order_id is None):
         st.session_state["opened_payment_id"] = selected_order_id
     opened_id = st.session_state.get("opened_payment_id")
     if not opened_id:
@@ -427,9 +541,12 @@ def render_payment_browser():
     if not order:
         clear_review()
         st.session_state.pop("opened_payment_id", None)
+        st.session_state.pop("payment_check_result", None)
         st.warning("The previously opened payment is no longer available. Select a payment and click Review payment.")
         return None
-    if opened_id != selected_order_id:
+    if selected_order_id is None:
+        st.info(f"Select a payment and click Review payment. The overview below still shows {short_payment_reference(opened_id)}.")
+    elif opened_id != selected_order_id:
         st.info(
             f"Selection changed. Click Review payment to open {short_payment_reference(selected_order_id)}. "
             f"The overview below still shows {short_payment_reference(opened_id)}."
@@ -490,7 +607,7 @@ def render_payment_check(order):
             result = None
         if pending:
             st.info("Click Review payment to open the selected payment before checking it.")
-        if st.button("Check payment", key="check_expected_payment", disabled=pending):
+        if st.button("Check payment", key="check_expected_payment", type="primary", disabled=pending):
             st.session_state.pop("payment_check_result", None)
             result = None
             try:
@@ -558,146 +675,153 @@ def open_rule_analysis(order_id):
     st.session_state["open_rule_analysis_for"] = order_id
 
 
+def render_inline_rule_analysis(selected_order):
+    selected_order_id = selected_order["order_id"]
+    st.caption("No saved review history. Any result shown below belongs to this session only.")
+    order_amount = float(selected_order["amount"])
+    currency = selected_order["currency"]
+    st.markdown("**1. Set a simulated baseline**")
+    average_amount = st.number_input(
+        f"Simulated comparison baseline ({currency})",
+        min_value=0.01,
+        value=100.00,
+        step=1.00,
+        key=f"simulated_average_{currency}",
+    )
+    st.caption("Enter a simulated baseline yourself. This is not actual historical spending data.")
+
+    analysis_signature = (selected_order_id, order_amount, currency, average_amount)
+    if st.session_state.get("risk_analysis_signature") != analysis_signature:
+        st.session_state.pop("risk_analysis", None)
+        st.session_state.pop("ai_explanation", None)
+        st.session_state.pop("risk_analysis_signature", None)
+
+    st.markdown("**2. Calculate the rule result**")
+    if st.button("Calculate rule result", key="analyze_saved_order", type="primary"):
+        ratio = transaction_ratio(order_amount, average_amount)
+        score = calculate_score(order_amount, average_amount)
+        level = risk_level(score)
+        st.session_state["risk_analysis"] = {
+            "order_id": selected_order_id,
+            "order_amount": order_amount,
+            "currency": currency,
+            "simulated_baseline": average_amount,
+            "amount_ratio": ratio,
+            "risk_score": score,
+            "risk_level": level,
+        }
+        st.session_state["risk_analysis_signature"] = analysis_signature
+        st.session_state.pop("ai_explanation", None)
+
+    analysis = st.session_state.get("risk_analysis")
+    render_order_summary(
+        selected_order,
+        analysis if st.session_state.get("risk_analysis_signature") == analysis_signature else None,
+    )
+    if analysis and st.session_state.get("risk_analysis_signature") == analysis_signature:
+        st.subheader("Order Risk Analysis Result")
+        st.caption("Current session review. This result is not saved.")
+        st.write(f"Order ID: {analysis['order_id']}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Order Amount", f"{analysis['order_amount']:.2f} {analysis['currency']}")
+        col2.metric(
+            "Simulated Average Baseline",
+            f"{analysis['simulated_baseline']:.2f} {analysis['currency']}",
+        )
+        col3.metric("Amount Ratio", f"{analysis['amount_ratio']:.2f}x")
+        col4, col5 = st.columns(2)
+        col4.metric("Risk Score", f"{analysis['risk_score']}/100")
+        col5.metric("Risk Level", analysis["risk_level"])
+        st.progress(analysis["risk_score"])
+        st.caption(
+            "This is a rules-based post-payment analysis. It is not PayPal's risk decision "
+            "and does not represent a probability of fraud."
+        )
+
+    return analysis if st.session_state.get("risk_analysis_signature") == analysis_signature else None
+
+
 def render_ai_rule_explanation(order):
     st.subheader("AI rule explanation")
     st.caption("Explains simulated rule results only. It does not verify the payment or review payment notifications.")
-    analysis = st.session_state.get("risk_analysis")
+    if order["status"] != "COMPLETED":
+        clear_review()
+        st.button("Open rule analysis", key="open_rule_analysis", disabled=True)
+        st.caption("Rule analysis is available only for completed payments. Payment records remain available below.")
+        return
     signature = (
         order["order_id"], float(order["amount"]), order["currency"],
         st.session_state.get(f"simulated_average_{order['currency']}"),
     )
-    valid = (
-        order["status"] == "COMPLETED" and analysis
-        and st.session_state.get("risk_analysis_signature") == signature
-    )
-    if not valid:
-        st.info("Calculate a simulated rule result first. Opening the analysis does not calculate a result or call AI.")
-        st.button(
-            "Open rule analysis", key="open_rule_analysis", on_click=open_rule_analysis,
-            args=(order["order_id"],), disabled=order["status"] != "COMPLETED",
-        )
-        if order["status"] != "COMPLETED":
-            st.caption("Rule analysis is available only for completed payments. Payment records remain available below.")
-        return
-    if st.button("Generate AI Explanation", key="generate_ai_explanation"):
-        st.session_state.pop("ai_explanation", None)
-        try:
-            openai_config = st.secrets["openai"]
-            api_key = openai_config["api_key"]
-            model = openai_config.get("model", DEFAULT_MODEL)
-            with st.spinner("Generating observation..."):
-                st.session_state["ai_explanation"] = explain_order_risk(
-                    api_key=api_key,
-                    model=model,
-                    order_amount=analysis["order_amount"],
-                    currency=analysis["currency"],
-                    simulated_baseline=analysis["simulated_baseline"],
-                    amount_ratio=analysis["amount_ratio"],
-                    risk_score=analysis["risk_score"],
-                    risk_level=analysis["risk_level"],
-                )
-        except AIExplanationError as error:
-            st.error(str(error))
-        except Exception:
-            st.error("AI explanation is unavailable. Check the local [openai] settings and try again.")
+    valid = bool(st.session_state.get("risk_analysis")) and st.session_state.get("risk_analysis_signature") == signature
+    opened = st.session_state.get("open_rule_analysis_for") == order["order_id"]
+    if not opened and not valid:
+        st.caption("Set a simulated baseline, calculate the rule result, then optionally request an AI explanation here.")
+        st.button("Open rule analysis", key="open_rule_analysis", on_click=open_rule_analysis, args=(order["order_id"],))
+    with st.expander("Simulated rule analysis", expanded=opened or valid):
+        analysis = render_inline_rule_analysis(order)
+        if not analysis:
+            st.info("Calculate the rule result above before generating an AI explanation. AI is never requested automatically.")
+            return
+        st.markdown("**3. Generate an AI explanation manually**")
+        if st.button("Generate AI Explanation", key="generate_ai_explanation", type="primary"):
+            st.session_state.pop("ai_explanation", None)
+            try:
+                openai_config = st.secrets["openai"]
+                api_key = openai_config["api_key"]
+                model = openai_config.get("model", DEFAULT_MODEL)
+                with st.spinner("Generating observation..."):
+                    st.session_state["ai_explanation"] = explain_order_risk(
+                        api_key=api_key,
+                        model=model,
+                        order_amount=analysis["order_amount"],
+                        currency=analysis["currency"],
+                        simulated_baseline=analysis["simulated_baseline"],
+                        amount_ratio=analysis["amount_ratio"],
+                        risk_score=analysis["risk_score"],
+                        risk_level=analysis["risk_level"],
+                    )
+            except AIExplanationError as error:
+                st.error(str(error))
+            except Exception:
+                st.error("AI explanation is unavailable. Check the local [openai] settings and try again.")
 
-    with st.container(key="ai_review_cards"):
-        observation_card, limitations_card, checks_card = st.columns(3, gap="small")
-        with observation_card:
-            with st.container(border=True):
-                st.markdown("### Observations")
-                if "ai_explanation" in st.session_state:
-                    st.write(st.session_state["ai_explanation"])
-                else:
-                    st.caption("Click Generate AI Explanation to request an observation. You can click again to retry.")
-        with limitations_card:
-            with st.container(border=True):
-                st.markdown("### Limitations")
-                st.write(REVIEW_LIMITATIONS)
-        with checks_card:
-            with st.container(border=True):
-                st.markdown("### Suggested checks")
-                st.caption("General suggestions for manual review, not findings about this payment.")
-                for suggestion in GENERAL_SUGGESTED_CHECKS:
-                    st.write(f"- {suggestion}")
+        with st.container(key="ai_review_cards"):
+            observation_card, limitations_card, checks_card = st.columns(3, gap="small")
+            with observation_card:
+                with st.container(border=True):
+                    st.markdown("### Observations")
+                    if "ai_explanation" in st.session_state:
+                        st.write(st.session_state["ai_explanation"])
+                    else:
+                        st.caption("Click Generate AI Explanation to request an observation. You can click again to retry.")
+            with limitations_card:
+                with st.container(border=True):
+                    st.markdown("### Limitations")
+                    st.write(REVIEW_LIMITATIONS)
+            with checks_card:
+                with st.container(border=True):
+                    st.markdown("### Suggested checks")
+                    st.caption("General suggestions for manual review, not findings about this payment.")
+                    for suggestion in GENERAL_SUGGESTED_CHECKS:
+                        st.write(f"- {suggestion}")
 
 
 def render_assumption_tools(selected_order):
-    open_analysis = st.session_state.get("open_rule_analysis_for") == selected_order["order_id"]
-    with st.expander("Explore assumptions", expanded=bool(open_analysis)):
+    with st.expander("Explore assumptions", expanded=False):
         st.caption("Optional simulations. They do not verify payment records or change the payment.")
         if selected_order["status"] != "COMPLETED":
             clear_review()
             st.info("Assumption tools are available only for completed payments. Payment records remain available above.")
             return
-        comparison_tab, rules_tab, amount_tab = st.tabs(
-            ["Compare baselines", "Rule review", "Hypothetical amount"],
-            default="Rule review" if open_analysis else "Compare baselines",
+        comparison_tab, amount_tab = st.tabs(["Compare baselines", "Hypothetical amount"])
+        analysis = st.session_state.get("risk_analysis")
+        analysis_signature = (
+            selected_order["order_id"], float(selected_order["amount"]), selected_order["currency"],
+            st.session_state.get(f"simulated_average_{selected_order['currency']}"),
         )
         with comparison_tab:
             render_baseline_sensitivity(selected_order)
-        with rules_tab:
-            selected_order_id = selected_order["order_id"]
-            summary = st.container()
-            st.caption("No saved review history. Any result shown below belongs to this session only.")
-            order_amount = float(selected_order["amount"])
-            currency = selected_order["currency"]
-            average_amount = st.number_input(
-                f"Simulated comparison baseline ({currency})",
-                min_value=0.01,
-                value=100.00,
-                step=1.00,
-                key=f"simulated_average_{currency}",
-            )
-            st.caption("Enter a simulated baseline yourself. This is not actual historical spending data.")
-
-            analysis_signature = (selected_order_id, order_amount, currency, average_amount)
-            if st.session_state.get("risk_analysis_signature") != analysis_signature:
-                st.session_state.pop("risk_analysis", None)
-                st.session_state.pop("ai_explanation", None)
-                st.session_state.pop("risk_analysis_signature", None)
-
-            if st.button("Calculate rule result", key="analyze_saved_order"):
-                ratio = transaction_ratio(order_amount, average_amount)
-                score = calculate_score(order_amount, average_amount)
-                level = risk_level(score)
-                st.session_state["risk_analysis"] = {
-                    "order_id": selected_order_id,
-                    "order_amount": order_amount,
-                    "currency": currency,
-                    "simulated_baseline": average_amount,
-                    "amount_ratio": ratio,
-                    "risk_score": score,
-                    "risk_level": level,
-                }
-                st.session_state["risk_analysis_signature"] = analysis_signature
-                st.session_state.pop("ai_explanation", None)
-
-            analysis = st.session_state.get("risk_analysis")
-            with summary:
-                render_order_summary(
-                    selected_order,
-                    analysis if st.session_state.get("risk_analysis_signature") == analysis_signature else None,
-                )
-            if analysis and st.session_state.get("risk_analysis_signature") == analysis_signature:
-                st.subheader("Order Risk Analysis Result")
-                st.caption("Current session review. This result is not saved.")
-                st.write(f"Order ID: {analysis['order_id']}")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Order Amount", f"{analysis['order_amount']:.2f} {analysis['currency']}")
-                col2.metric(
-                    "Simulated Average Baseline",
-                    f"{analysis['simulated_baseline']:.2f} {analysis['currency']}",
-                )
-                col3.metric("Amount Ratio", f"{analysis['amount_ratio']:.2f}x")
-                col4, col5 = st.columns(2)
-                col4.metric("Risk Score", f"{analysis['risk_score']}/100")
-                col5.metric("Risk Level", analysis["risk_level"])
-                st.progress(analysis["risk_score"])
-                st.caption(
-                    "This is a rules-based post-payment analysis. It is not PayPal's risk decision "
-                    "and does not represent a probability of fraud."
-                )
 
         with amount_tab:
             if analysis and st.session_state.get("risk_analysis_signature") == analysis_signature:
@@ -740,13 +864,13 @@ def render_assumption_tools(selected_order):
                     st.metric("Risk Level", hypothetical_level)
                 st.metric("Score Change", f"{score_change:+d} points")
             else:
-                st.info("Run Calculate rule result in Rule review first to explore a hypothetical amount.")
+                st.info("Calculate a rule result in AI rule explanation above first to explore a hypothetical amount.")
 
 
 def render_payment():
     st.subheader("Create orders and payments")
     st.caption("Sandbox test payments. Browsing orders does not change the current payment target.")
-    order_amount = st.number_input("Sandbox Order Amount (CAD)", min_value=0.01, value=10.00, step=1.00)
+    order_amount = st.number_input("Sandbox Order Amount (CAD)", min_value=0.01, value=10.00, step=1.00, key="sandbox_order_amount")
 
     creation_attempt_id = st.query_params.get("create_attempt")
     creation_attempt = get_order_creation_attempt(creation_attempt_id) if creation_attempt_id else None
@@ -834,7 +958,7 @@ def render_payment():
             if st.button("Check PayPal Order Status", key="check_paypal_order_status"):
                 try:
                     paypal_config = st.secrets["paypal"]
-                    remote_status, capture_id = get_order_status(
+                    observation = get_order_status(
                         paypal_config["client_id"],
                         paypal_config["client_secret"],
                         paypal_order_id,
@@ -842,8 +966,13 @@ def render_payment():
                 except Exception:
                     st.error("Could not confirm the PayPal order status. The Capture result remains unconfirmed.")
                 else:
+                    remote_status, capture_id = observation
+                    try:
+                        record_payment_observation(paypal_order_id, observation)
+                    except Exception:
+                        st.error("Provider evidence could not be saved. No payment retry has been enabled.")
+                        return
                     if remote_status == "COMPLETED":
-                        update_order_status(paypal_order_id, remote_status, capture_id)
                         st.rerun()
                     elif remote_status == "APPROVED":
                         mark_capture_ready(paypal_order_id)
@@ -867,7 +996,7 @@ def render_payment():
                         st.error("Could not read the local PayPal configuration. Check .streamlit/secrets.toml.")
                     else:
                         try:
-                            capture_status, capture_id = capture_order(
+                            observation = capture_order(
                                 client_id,
                                 client_secret,
                                 paypal_order_id,
@@ -882,8 +1011,14 @@ def render_payment():
                             mark_capture_unknown(paypal_order_id)
                             st.rerun()
                         else:
+                            capture_status, capture_id = observation
+                            try:
+                                record_payment_observation(paypal_order_id, observation)
+                            except Exception:
+                                mark_capture_unknown(paypal_order_id)
+                                st.error("Provider response could not be saved. Query status before any retry.")
+                                return
                             if capture_status == "COMPLETED":
-                                update_order_status(paypal_order_id, capture_status, capture_id)
                                 st.rerun()
                             else:
                                 mark_capture_unknown(paypal_order_id)
@@ -920,7 +1055,7 @@ def render_payment_records(selected_order):
             cards.append('</div>')
             st.markdown("".join(cards), unsafe_allow_html=True)
             st.caption(
-                "Evidence comes from saved records. A missing record does not mean a step was skipped."
+                "Evidence comes from saved records. A missing notification does not mean payment failed."
             )
 
             with st.expander("Record details", expanded=False):
@@ -980,21 +1115,157 @@ def render_payment_records(selected_order):
             st.info("Select a payment and click Review payment to view its records.")
 
 
-review_tab, sandbox_tab = st.tabs(["Review payments", "Sandbox tools"])
-with review_tab:
+def render_merchant_reconciliation(order):
+    evidence = get_sale_reconciliation(order["order_id"])
+    order = evidence["order"]
+    sale = evidence["sale"]
+    if not sale:
+        with st.expander("Merchant reconciliation", expanded=False):
+            st.caption("Historical data insufficient — no merchant order link. Manual expectation checking below compares only the recorded order amount.")
+        return False
+    st.subheader("Merchant reconciliation")
+    st.caption("Sandbox only. Compares immutable merchant terms with saved provider Capture evidence, not bank settlement or net proceeds.")
+    st.caption("All reconciliation values use one local snapshot, not guaranteed to be the latest after reading. No automatic refresh or retry.")
+    left, right = st.columns(2)
+    left.metric("Merchant expected amount", f"{sale['amount']} {sale['currency']}")
+    captures = evidence["captures"]
+    if len(captures) == 1 and captures[0]["amount"] and captures[0]["currency"]:
+        right.metric("Saved Sandbox Capture amount", f"{captures[0]['amount']} {captures[0]['currency']}")
+    else:
+        right.write("Capture amount: not confirmed as a single supported Capture")
+    result = evidence["result"]
+    if result["code"] == "MATCH":
+        st.success(result["summary"])
+    else:
+        st.warning(result["summary"])
+    with st.expander("Reconciliation evidence", expanded=False):
+        st.write(f"Test sales order: {sale['sale_id']}")
+        st.write(f"Local status in this snapshot: {order['status']}")
+        for capture in captures:
+            st.write(f"Capture: {capture['capture_id']} | Status: {capture['status'] or 'Not recorded'} | Final: {capture['final_capture']}")
+            st.write(f"Amount observation source: {capture['source']} | Provider creation time: {capture['occurred_at'] or 'Not recorded'} | First locally stored: {capture['recorded_at']} UTC")
+            st.write(f"Full Capture proof: {'Confirmed' if capture['full_capture_verified'] else 'Not confirmed'} | Provider purchase unit total: {capture['provider_order_amount'] or 'Not recorded'} {capture['provider_order_currency'] or ''}")
+        if evidence["observations"]:
+            st.markdown("**Saved Capture observations — including conflicting values**")
+            st.table([{
+                "Capture ID": item["capture_id"],
+                "Amount": item["amount"] or "Not recorded",
+                "Currency": item["currency"] or "Not recorded",
+                "Source": item["source"],
+                "Provider creation time": item["occurred_at"] or "Not recorded",
+                "Locally stored (UTC)": item["recorded_at"],
+                "Provider order amount": item["provider_order_amount"] or "Not recorded",
+                "Provider order currency": item["provider_order_currency"] or "Not recorded",
+            } for item in evidence["observations"]])
+        for issue in evidence["issues"]:
+            st.warning(issue)
+        st.caption("Merchant terms are locally supplied test records, not externally verified invoices. Multiple or partial captures are not reconciled automatically. Refunds do not erase the historical Capture amount.")
+    # A read-only provider GET is explicit and never issues a Capture request.
+    if st.button("Refresh Capture evidence from PayPal", key="refresh_merchant_evidence"):
+        try:
+            settings = st.secrets["paypal"]
+            observation = get_order_status(settings["client_id"], settings["client_secret"], order["order_id"])
+            record_payment_observation(order["order_id"], observation)
+            st.rerun()
+        except Exception:
+            st.error("Could not refresh and save provider evidence. Existing records were retained; no payment was initiated.")
+    return True
+
+
+def open_linked_payment(sale_id):
+    """Select an existing linked payment and its saved retry identity, without creating anything."""
+    sale = next((item for item in get_merchant_sales() if item["sale_id"] == sale_id), None)
+    attempt = get_order_creation_attempt(sale["creation_request_id"]) if sale and sale["creation_request_id"] else None
+    if not sale or not sale["paypal_order_id"] or not attempt or attempt["order_id"] != sale["paypal_order_id"]:
+        st.session_state["merchant_navigation_error"] = "The saved payment link or creation attempt is unavailable. No payment was selected or created."
+        return
+    st.query_params["create_attempt"] = attempt["request_id"]
+    st.query_params.pop("token", None)
+    st.session_state["paypal_order_id"] = sale["paypal_order_id"]
+    st.session_state["paypal_approval_url"] = attempt["approval_url"]
+    st.session_state["main_navigation"] = "Sandbox tools"
+    st.session_state.pop("merchant_navigation_error", None)
+
+
+def render_merchant_orders():
+    st.subheader("Test sales orders — Sandbox only")
+    st.caption("Create a merchant expectation, then create exactly one linked PayPal order. Saved terms cannot be edited. Do not enter personal information.")
+    with st.form("new_merchant_sale"):
+        description = st.text_input("Test order description", max_chars=120)
+        amount = st.text_input("Merchant expected amount (CAD)", value="10.00")
+        saved = st.form_submit_button("Save test sales order")
+    if saved:
+        try:
+            sale_id = create_merchant_sale(description, amount)
+            st.success("Test sales order saved. Select it below to start its payment.")
+        except ValueError as error:
+            st.error(str(error))
+    sales = get_merchant_sales()
+    if not sales:
+        st.info("No merchant sales orders yet. Save a test order above.")
+        return
+    by_id = {sale["sale_id"]: sale for sale in sales}
+    selected = st.selectbox("Select a test sales order", list(by_id),
+        format_func=lambda key: f"{by_id[key]['description']} | {by_id[key]['amount']} CAD | {key[-8:]}", key="merchant_sale_id")
+    sale = by_id[selected]
+    if st.session_state.get("merchant_navigation_error"):
+        st.error(st.session_state["merchant_navigation_error"])
+    st.write(f"Merchant order: {sale['sale_id']} | Expected: {sale['amount']} CAD")
+    st.caption("Terms immutable from saving. Payment binding locked before the first provider request.")
+    if st.button("Create or resume linked PayPal order", key="create_merchant_payment", type="primary"):
+        try:
+            attempt_id = begin_sale_creation(selected)
+            attempt = get_order_creation_attempt(attempt_id)
+            st.query_params["create_attempt"] = attempt_id
+            st.query_params.pop("token", None)
+            if not attempt["order_id"]:
+                settings = st.secrets["paypal"]
+                order_id, approval_url = create_order(settings["client_id"], settings["client_secret"], attempt["amount"], request_id=attempt_id)
+                complete_order_creation(attempt_id, order_id, approval_url)
+            attempt = get_order_creation_attempt(attempt_id)
+            st.session_state["paypal_order_id"] = attempt["order_id"]
+            st.session_state["paypal_approval_url"] = attempt["approval_url"]
+            st.rerun()
+        except Exception:
+            st.error("Creation not confirmed. The saved attempt is retained; resume this same sales order, do not create a replacement to retry.")
+    if sale["paypal_order_id"]:
+        st.write(f"Linked PayPal order: {sale['paypal_order_id']}")
+        st.info("Open Sandbox tools for this order's approval/Capture controls. View its saved reconciliation in Review payments.")
+        st.button("Open payment in Sandbox tools", key="activate_merchant_payment",
+                  on_click=open_linked_payment, args=(selected,))
+
+
+# Preserve owned inputs while their section is not rendered by native navigation.
+for input_key in list(st.session_state):
+    if input_key in {"review_order_id", "merchant_sale_id", "sandbox_order_amount"} or (
+        input_key.startswith(("simulated_average_", "expected_amount_", "expected_currency_", "sensitivity_baseline_", "what_if_amount_"))
+        and "_preset_" not in input_key
+    ):
+        st.session_state[input_key] = st.session_state[input_key]
+sections = ["Review payments", "Sandbox tools", "Test sales orders"]
+initial_section = "Sandbox tools" if st.query_params.get("create_attempt") or st.query_params.get("token") else "Review payments"
+if "main_navigation" not in st.session_state:
+    st.session_state["main_navigation"] = initial_section
+active_section = st.radio("Workspace", sections, horizontal=True, key="main_navigation")
+if active_section == "Review payments":
     with st.container(key="workbench"):
         selected_order = render_payment_browser()
         if selected_order:
             render_payment_overview(selected_order)
-            render_payment_check(selected_order)
-            ai_entry = st.container()
+            if not render_merchant_reconciliation(selected_order):
+                render_payment_check(selected_order)
+            render_ai_rule_explanation(selected_order)
             render_payment_records(selected_order)
-            st.info("Payment occurrence time is not recorded. A missing notification does not mean payment failed.")
-            st.caption("General manual check, not a finding: compare the amount and currency with your own records, if available.")
             render_assumption_tools(selected_order)
-            with ai_entry:
-                render_ai_rule_explanation(selected_order)
-with sandbox_tab:
+elif active_section == "Sandbox tools":
     st.caption("Development tools for Sandbox test payments. This is separate from viewing payment records.")
+    linked_payment_notice = st.container()
     render_authentication()
     render_payment()
+    with linked_payment_notice:
+        linked_sale = next((sale for sale in get_merchant_sales() if sale["paypal_order_id"] == st.session_state.get("paypal_order_id")), None)
+        if linked_sale:
+            st.info(f"Active linked PayPal order: {linked_sale['paypal_order_id']} | Test sales order: {linked_sale['sale_id']} | Expected: {linked_sale['amount']} {linked_sale['currency']}")
+
+elif active_section == "Test sales orders":
+    render_merchant_orders()

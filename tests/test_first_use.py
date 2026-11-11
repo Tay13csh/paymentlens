@@ -61,19 +61,19 @@ class FirstUseTests(unittest.TestCase):
 
     def test_empty_first_use_has_a_clear_route_to_separate_sandbox_tools(self):
         app = self.app()
-        review = next(tab for tab in app.tabs if tab.label == "Review payments")
-        sandbox = next(tab for tab in app.tabs if tab.label == "Sandbox tools")
-        self.assertTrue(any("No saved payments" in item.value and "Sandbox tools tab" in item.value and "Create Sandbox Order" in item.value for item in review.info))
-        self.assertTrue(any(button.label == "Create Sandbox Order" for button in sandbox.button))
-        self.assertTrue(any(button.label == "Get Sandbox Access Token" for button in sandbox.button))
+        review = app
+        self.assertTrue(any("No saved payments" in item.value and "Sandbox tools section" in item.value and "Create Sandbox Order" in item.value for item in review.info))
         self.assertFalse(review.button)
         self.assertFalse(review.number_input)
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
+        self.assertTrue(any(button.label == "Create Sandbox Order" for button in app.button))
+        self.assertTrue(any(button.label == "Get Sandbox Access Token" for button in app.button))
         self.assert_no_requests()
 
     def test_initial_selection_requires_review_action_without_a_baseline(self):
         self.save()
         app = self.app()
-        review = next(tab for tab in app.tabs if tab.label == "Review payments")
+        review = app
         self.assertTrue(any(button.label == "Review payment" for button in review.button))
         self.assertFalse(any(item.value.startswith('<section class="pg-payment-overview') for item in app.markdown))
         self.assertFalse(review.number_input)
@@ -136,12 +136,13 @@ class FirstUseTests(unittest.TestCase):
         self.open(app)
         self.assertFalse(any(button.key == "generate_ai_explanation" for button in app.button))
         app.button(key="analyze_saved_order").click().run()
-        rules = next(tab for tab in app.tabs if tab.label == "Rule review")
-        sandbox = next(tab for tab in app.tabs if tab.label == "Sandbox tools")
-        self.assertFalse(any(button.key == "generate_ai_explanation" for button in rules.button))
+        rules = next(item for item in app.expander if item.label == "Simulated rule analysis")
+        self.assertTrue(any(button.key == "generate_ai_explanation" for button in rules.button))
+        self.assertFalse(any(tab.label == "Rule review" for tab in app.tabs))
         self.assertTrue(any(button.key == "generate_ai_explanation" for button in app.button))
-        self.assertFalse(any(button.key == "generate_ai_explanation" for button in sandbox.button))
         self.assertTrue(any("does not verify the payment or review payment notifications" in item.value for item in app.caption))
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
+        self.assertFalse(any(button.key == "generate_ai_explanation" for button in app.button))
         self.assert_no_requests()
 
     def test_ai_entry_opens_rule_analysis_without_calculating_or_requesting_ai(self):
@@ -153,7 +154,12 @@ class FirstUseTests(unittest.TestCase):
         self.assertLess(headings.index("AI rule explanation"), headings.index("Payment records"))
         app.button(key="open_rule_analysis").click().run()
         self.assertFalse(app.exception)
-        self.assertTrue(next(item for item in app.expander if item.label == "Explore assumptions").proto.expanded)
+        panel = next(item for item in app.expander if item.label == "Simulated rule analysis")
+        self.assertTrue(panel.proto.expanded)
+        self.assertFalse(next(item for item in app.expander if item.label == "Explore assumptions").proto.expanded)
+        self.assertEqual(sum(field.key == "simulated_average_CAD" for field in app.number_input), 1)
+        self.assertTrue(any(field.key == "simulated_average_CAD" for field in panel.number_input))
+        self.assertTrue(any(button.key == "analyze_saved_order" for button in panel.button))
         self.assertEqual(app.session_state["open_rule_analysis_for"], A)
         self.assertNotIn("risk_analysis", app.session_state)
         self.assertNotIn("ai_explanation", app.session_state)
@@ -179,6 +185,36 @@ class FirstUseTests(unittest.TestCase):
         self.assertFalse(any(button.key == "generate_ai_explanation" for button in app.button))
         self.assert_no_requests()
 
+    def test_inline_rule_flow_uses_one_control_set_and_clears_stale_results(self):
+        self.save()
+        app = self.app()
+        self.open(app)
+        app.button(key="open_rule_analysis").click().run()
+        panel = next(item for item in app.expander if item.label == "Simulated rule analysis")
+        panel.number_input(key="simulated_average_CAD").set_value(5.0).run()
+        self.assertNotIn("risk_analysis", app.session_state)
+        self.ai.assert_not_called()
+        app.button(key="analyze_saved_order").click().run()
+        panel = next(item for item in app.expander if item.label == "Simulated rule analysis")
+        self.assertTrue(any(metric.label == "Risk Score" and metric.value == "50/100" for metric in panel.metric))
+        self.assertEqual(sum(button.key == "analyze_saved_order" for button in app.button), 1)
+        self.assertEqual(sum(button.key == "generate_ai_explanation" for button in app.button), 1)
+        self.assertTrue(any(button.key == "generate_ai_explanation" for button in panel.button))
+        headings = [item.value for item in app.subheader]
+        self.assertLess(headings.index("AI rule explanation"), headings.index("Order Risk Analysis Result"))
+        self.assertLess(headings.index("Order Risk Analysis Result"), headings.index("Payment records"))
+        app.session_state["ai_explanation"] = "Old observation"
+        app.number_input(key="simulated_average_CAD").set_value(2.0).run()
+        self.assertNotIn("risk_analysis", app.session_state)
+        self.assertNotIn("ai_explanation", app.session_state)
+        self.assertFalse(any(button.key == "generate_ai_explanation" for button in app.button))
+        panel = next(item for item in app.expander if item.label == "Simulated rule analysis")
+        self.assertTrue(panel.proto.expanded)
+        self.assertTrue(any(button.key == "analyze_saved_order" for button in panel.button))
+        self.assertTrue(any(tab.label == "Compare baselines" for tab in app.tabs))
+        self.assertTrue(any(tab.label == "Hypothetical amount" for tab in app.tabs))
+        self.assert_no_requests()
+
     def test_full_identifiers_are_in_collapsed_record_details_not_the_overview(self):
         self.save()
         app = self.app()
@@ -189,7 +225,118 @@ class FirstUseTests(unittest.TestCase):
         details = next(item for item in app.expander if item.label == "Record details")
         self.assertFalse(details.proto.expanded)
         self.assertIn(f"Payment ID: {A}", "\n".join(item.value for item in details.markdown))
-        self.assertTrue(any("General manual check, not a finding" in item.value for item in app.caption))
+        self.assertEqual(sum("A missing notification does not mean payment failed" in item.value for item in app.caption), 1)
+        self.assertFalse(any("Payment occurrence time is not recorded" in item.value for item in app.info))
+        self.assert_no_requests()
+
+    def test_reordering_keeps_pending_selection_and_opened_payment_separate(self):
+        self.save()
+        self.save(B)
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("UPDATE orders SET updated_at = '2020-01-01' WHERE order_id = ?", (A,))
+            connection.execute("UPDATE orders SET updated_at = '2030-01-01' WHERE order_id = ?", (B,))
+        app = self.app()
+        self.open(app)
+        app.session_state["paypal_order_id"] = A
+        app.selectbox(key="review_order_id").select(B).run()
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("UPDATE orders SET updated_at = '2030-01-01' WHERE order_id = ?", (A,))
+            connection.execute("UPDATE orders SET updated_at = '2020-01-01' WHERE order_id = ?", (B,))
+        app.run()
+        self.assertEqual(app.selectbox(key="review_order_id").value, B)
+        self.assertEqual(app.session_state["opened_payment_id"], A)
+        self.assertEqual(app.session_state["paypal_order_id"], A)
+        self.assertIn("…111111", self.overview(app))
+        app.button(key="open_payment_review").click().run()
+        self.assertEqual(app.session_state["opened_payment_id"], B)
+        self.assert_no_requests()
+
+    def test_missing_pending_selection_requires_explicit_reselection(self):
+        self.save()
+        self.save(B)
+        app = self.app()
+        self.open(app)
+        app.selectbox(key="review_order_id").select(B).run()
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("DELETE FROM orders WHERE order_id = ?", (B,))
+        app.run()
+        self.assertIsNone(app.selectbox(key="review_order_id").value)
+        self.assertTrue(app.button(key="open_payment_review").disabled)
+        self.assertEqual(app.session_state["opened_payment_id"], A)
+        self.assertIn("…111111", self.overview(app))
+        self.assertTrue(any("no longer available" in item.value and "Select a payment again" in item.value for item in app.warning))
+        app.run()
+        self.assertIsNone(app.selectbox(key="review_order_id").value)
+        app.selectbox(key="review_order_id").select(A).run()
+        self.assertFalse(app.button(key="open_payment_review").disabled)
+        self.assert_no_requests()
+
+    def test_missing_opened_payment_clears_results_without_opening_another(self):
+        self.save()
+        self.save(B)
+        app = self.app()
+        self.open(app)
+        app.button(key="analyze_saved_order").click().run()
+        app.session_state["ai_explanation"] = "Old observation"
+        app.text_input(key=f"expected_amount_{A}").set_value("10").run()
+        app.button(key="check_expected_payment").click().run()
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("DELETE FROM orders WHERE order_id = ?", (A,))
+        app.run()
+        self.assertIsNone(app.selectbox(key="review_order_id").value)
+        for key in ("opened_payment_id", "risk_analysis", "ai_explanation", "payment_check_result"):
+            self.assertNotIn(key, app.session_state)
+        self.assertFalse(any(item.value.startswith('<section class="pg-payment-overview') for item in app.markdown))
+        app.selectbox(key="review_order_id").select(B).run()
+        self.assertNotIn("opened_payment_id", app.session_state)
+        app.button(key="open_payment_review").click().run()
+        self.assertEqual(app.session_state["opened_payment_id"], B)
+        self.assert_no_requests()
+
+    def test_existing_selection_outside_recent_list_is_not_treated_as_deleted(self):
+        self.save()
+        self.save(B)
+        app = self.app()
+        self.open(app)
+        with patch.object(order_store, "get_orders", return_value=[order_store.get_order(B)]):
+            app.run()
+        self.assertEqual(app.selectbox(key="review_order_id").value, A)
+        self.assertEqual(app.session_state["opened_payment_id"], A)
+        self.assertFalse(any("no longer available" in item.value for item in app.warning))
+        self.assert_no_requests()
+
+    def test_removing_all_orders_does_not_auto_select_a_later_record(self):
+        self.save()
+        app = self.app()
+        self.open(app)
+        with sqlite3.connect(order_store.DATABASE_PATH) as connection:
+            connection.execute("DELETE FROM orders")
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertNotIn("opened_payment_id", app.session_state)
+        self.assertTrue(any("Select a payment again" in item.value for item in app.warning))
+        self.save(B)
+        app.run()
+        self.assertIsNone(app.selectbox(key="review_order_id").value)
+        self.assertTrue(app.button(key="open_payment_review").disabled)
+        self.assertNotIn("opened_payment_id", app.session_state)
+        self.assert_no_requests()
+
+    def test_primary_actions_and_selected_preset_keep_distinct_button_types(self):
+        self.save()
+        app = self.app()
+        self.open(app)
+        self.assertEqual(app.button(key="open_payment_review").proto.type, "primary")
+        self.assertEqual(app.button(key="check_expected_payment").proto.type, "primary")
+        self.assertEqual(app.button(key="open_rule_analysis").proto.type, "secondary")
+        presets = {button.label: button for button in app.button if button.label.startswith("Use baseline")}
+        self.assertEqual(presets["Use baseline 10 CAD"].proto.type, "primary")
+        self.assertEqual(presets["Use baseline 5 CAD"].proto.type, "secondary")
+        presets["Use baseline 5 CAD"].click().run()
+        presets = {button.label: button for button in app.button if button.label.startswith("Use baseline")}
+        self.assertEqual(presets["Use baseline 5 CAD"].proto.type, "primary")
+        self.assertEqual(presets["Use baseline 10 CAD"].proto.type, "secondary")
+        self.assertTrue(any(item.value == "**Selected preset: 5 CAD**" for item in app.markdown))
         self.assert_no_requests()
 
 

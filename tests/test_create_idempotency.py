@@ -53,6 +53,8 @@ class CreateIdempotencyTests(unittest.TestCase):
         }))
 
     def click(self, app, label):
+        if app.radio(key="main_navigation").value != "Sandbox tools":
+            app.radio(key="main_navigation").set_value("Sandbox tools").run()
         next(button for button in app.button if button.label == label).click().run()
         self.assertFalse(app.exception)
 

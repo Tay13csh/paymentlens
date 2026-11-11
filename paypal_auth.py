@@ -4,6 +4,7 @@ from typing import Optional
 import uuid
 
 import requests
+from payment_evidence import PaymentObservation, normalize_order, money
 
 
 SANDBOX_TOKEN_URL = "https://api-m.sandbox.paypal.com/v1/oauth2/token"
@@ -63,6 +64,10 @@ def create_order(
     """Create a Sandbox order and return its ID and buyer approval URL."""
     if not isinstance(request_id, str) or not request_id:
         raise PayPalOrderError("A saved creation attempt is required before creating an order.")
+    try:
+        amount = money(amount)
+    except ValueError as error:
+        raise PayPalOrderError(str(error)) from None
     access_token = get_access_token(client_id, client_secret)
 
     try:
@@ -129,20 +134,8 @@ def get_capture_request_id(order_id: str) -> str:
 
 
 def _extract_capture_id(response_data: dict) -> Optional[str]:
-    purchase_units = response_data.get("purchase_units", [])
-    if isinstance(purchase_units, list):
-        for purchase_unit in purchase_units:
-            if not isinstance(purchase_unit, dict):
-                continue
-            payments = purchase_unit.get("payments", {})
-            captures = payments.get("captures", []) if isinstance(payments, dict) else []
-            if isinstance(captures, list) and captures:
-                first_capture = captures[0]
-                if isinstance(first_capture, dict):
-                    capture_id = first_capture.get("id")
-                    if isinstance(capture_id, str):
-                        return capture_id
-    return None
+    captures, _ = normalize_order(response_data, response_data.get("id"))
+    return captures[0]["capture_id"] if len(captures) == 1 else None
 
 
 def capture_order(client_id: str, client_secret: str, order_id: str) -> tuple[str, Optional[str]]:
@@ -157,6 +150,7 @@ def capture_order(client_id: str, client_secret: str, order_id: str) -> tuple[st
                 "Content-Type": "application/json",
                 "Accept": "application/json",
                 "PayPal-Request-Id": get_capture_request_id(order_id),
+                "Prefer": "return=representation",
             },
             timeout=20,
         )
@@ -192,7 +186,9 @@ def capture_order(client_id: str, client_secret: str, order_id: str) -> tuple[st
             "Capture result is unconfirmed. Check the PayPal order status before trying again."
         )
 
-    return status, capture_id if isinstance(capture_id, str) else None
+    if response_data.get("id") and response_data["id"] != order_id:
+        raise PayPalCaptureUnknownError("Provider order identity differs. Capture remains unconfirmed.")
+    return PaymentObservation(response_data, order_id, "CAPTURE_RESPONSE")
 
 
 def get_order_status(client_id: str, client_secret: str, order_id: str) -> tuple[str, Optional[str]]:
@@ -228,7 +224,9 @@ def get_order_status(client_id: str, client_secret: str, order_id: str) -> tuple
     if not isinstance(status, str) or not status:
         raise PayPalOrderError("PayPal returned no order status. The Capture result remains unconfirmed.")
 
-    return status, _extract_capture_id(response_data)
+    if response_data.get("id") and response_data["id"] != order_id:
+        raise PayPalOrderError("Provider order identity differs. No status update was applied.")
+    return PaymentObservation(response_data, order_id, "ORDER_QUERY")
 
 
 def verify_webhook_signature(

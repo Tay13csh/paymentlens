@@ -60,7 +60,7 @@ class CaptureSafetyTests(unittest.TestCase):
     def run_app_for_order(self, order_id):
         app = AppTest.from_file(str(APP_PATH)).run()
         app.query_params["token"] = order_id
-        app.run()
+        app.radio(key="main_navigation").set_value("Sandbox tools").run()
         return app
 
     @staticmethod
