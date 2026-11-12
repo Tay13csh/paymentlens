@@ -4,7 +4,7 @@
 
 **Video URL: TODO — add the reviewed final video URL before submission.**
 
-Repository: [Tay13csh/payguard-ai](https://github.com/Tay13csh/payguard-ai).
+Repository: [Tay13csh/paymentlens](https://github.com/Tay13csh/paymentlens).
 
 ## The problem
 

@@ -33,7 +33,7 @@ Runtime is Streamlit/Python REST calls to PayPal Sandbox, plus an explicit OpenA
 - **Assumptions**: optional user-entered scoring simulations, not saved merchant terms.
 - **AI explanations**: fallible interpretations, not a new authoritative event or computed result.
 
-The historical `payguard.db` filename and deterministic capture-request namespace are compatibility identifiers. They are not the display name; renaming them is outside the branding update. The GitHub repository URL is unchanged.
+The historical `payguard.db` filename and deterministic capture-request namespace are compatibility identifiers. They are not the display name; renaming them is outside the branding update. The GitHub repository is now `Tay13csh/paymentlens`; its development history is retained.
 
 ## Reconciliation
 

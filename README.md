@@ -8,7 +8,7 @@ PaymentLens is a local PayPal Sandbox prototype that puts merchant expectations,
 
 **Demo video: TODO — add the final video URL before submission.**
 
-Repository: [Tay13csh/payguard-ai](https://github.com/Tay13csh/payguard-ai). [Submission introduction](SUBMISSION.md) · [Video script and shot list](docs/VIDEO_SCRIPT.md)
+Repository: [Tay13csh/paymentlens](https://github.com/Tay13csh/paymentlens). [Submission introduction](SUBMISSION.md) · [Video script and shot list](docs/VIDEO_SCRIPT.md)
 
 ## The core flow
 
