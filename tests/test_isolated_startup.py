@@ -10,7 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-DELIVERABLES = ("reconciliation_report.py", "reconciliation_facts.py", "analysis_view.py", "SUBMISSION.md", "app.py", "paypal_auth.py", "order_store.py", "payment_evidence.py", "ai_explanation.py", "risk.py", "webhook_server.py",
+DELIVERABLES = ("docs/SETUP.md", "docs/USER_GUIDE.md", "docs/ARCHITECTURE.md", "docs/VALIDATION.md", "docs/LIMITATIONS.md", "docs/VIDEO_SCRIPT.md",
+                "reconciliation_report.py", "reconciliation_facts.py", "analysis_view.py", "SUBMISSION.md", "app.py", "paypal_auth.py", "order_store.py", "payment_evidence.py", "ai_explanation.py", "risk.py", "webhook_server.py",
                 "payment_assistant.py", "payment_assistant_ui.py", "runtime_config.py", "guided_demo.py", "README.md", "LICENSE", "requirements.txt", ".gitignore", ".streamlit/secrets.toml.example")
 
 
